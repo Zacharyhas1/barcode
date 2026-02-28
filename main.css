@@ -299,6 +299,15 @@ textarea:focus {
     background: #292e42;
 }
 
+.folder.folder-drag-source {
+    border-color: #f7768e;
+    background: #2e1a1a;
+}
+
+.folder.folder-drag-source > .folder-header {
+    background: #2e1a1a;
+}
+
 .folder-header {
     display: flex;
     align-items: center;
