@@ -663,7 +663,7 @@ window.onload = () => {
 
         const moveButton = document.createElement('button');
         moveButton.className = 'move-button';
-        moveButton.textContent = '\u{2B9E}';
+        moveButton.textContent = '\u25B8';
         moveButton.onclick = (e) => {
             e.stopPropagation();
             showMoveModal(historyItem);
