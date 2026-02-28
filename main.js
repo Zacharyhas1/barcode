@@ -718,21 +718,28 @@ window.onload = () => {
                 if (oldFolder) updateFolderCount(oldFolder);
             });
 
-            // Header dragover: accept items into folder + reorder folders at top level
+            // Header dragover: accept items into folder, drag out, or reorder folders
             header.addEventListener('dragover', (e) => {
                 e.preventDefault();
+                e.stopPropagation(); // Don't let folder-level dragover also fire
                 const dragging = document.querySelector('.dragging');
                 if (!dragging || dragging === folder) return;
 
                 if (dragging.classList.contains('history-item')) {
-                    // History item dragged over folder header - move into folder
-                    if (dragging.parentNode === folderItemsEl) return;
-                    folder.classList.add('folder-drop-target');
-                    const oldFolder = dragging.closest('.folder');
-                    folderItemsEl.insertBefore(dragging, folderItemsEl.firstChild);
-                    if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-                    updateFolderCount(folder);
-                    if (oldFolder) updateFolderCount(oldFolder);
+                    if (dragging.parentNode === folderItemsEl) {
+                        // Dragging over OWN folder header - move out to top level
+                        folder.classList.remove('folder-drop-target');
+                        historyContainer.insertBefore(dragging, folder);
+                        updateFolderCount(folder);
+                    } else {
+                        // Dragging into this folder
+                        folder.classList.add('folder-drop-target');
+                        const oldFolder = dragging.closest('.folder');
+                        folderItemsEl.insertBefore(dragging, folderItemsEl.firstChild);
+                        if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
+                        updateFolderCount(folder);
+                        if (oldFolder) updateFolderCount(oldFolder);
+                    }
                 } else if (dragging.classList.contains('folder') && dragging.parentNode === historyContainer) {
                     // Another folder dragged over this header - reorder at top level
                     const allTopLevel = [...historyContainer.children].filter(el =>
@@ -745,10 +752,6 @@ window.onload = () => {
                         historyContainer.insertBefore(dragging, folder.nextSibling);
                     }
                 }
-            });
-
-            header.addEventListener('dragleave', () => {
-                folder.classList.remove('folder-drop-target');
             });
         } else {
             // Touch drag for folder reordering via header

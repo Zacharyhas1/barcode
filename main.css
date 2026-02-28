@@ -283,6 +283,7 @@ textarea:focus {
     border-left: 3px solid #7aa2f7;
     border-radius: 6px;
     background: #1a1b2e;
+    transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .folder.dragging {
