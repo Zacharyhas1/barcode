@@ -47,11 +47,11 @@ body {
     transform-origin: center;
     max-width: none;
     height: 80px;
-    transition: all 0.3s ease;
+    transition: height 0.3s ease;
 }
 
 .fullscreen #barcode {
-    height: 90vw;
+    height: auto;
     max-height: none;
     max-width: none;
 }
