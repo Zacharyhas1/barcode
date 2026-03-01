@@ -1,3 +1,7 @@
+import { createScanner } from './modules/scanner.js';
+import { loadHistory, persistHistory, clearHistory } from './modules/store.js';
+import { createDragSystem } from './modules/drag.js';
+
 // Wait for JsBarcode to be available
 window.onload = () => {
     const input = document.getElementById('barcodeInput');
@@ -46,262 +50,14 @@ window.onload = () => {
     `;
     document.body.appendChild(modal);
 
-    // Add scanning overlay
-    const scanOverlay = document.createElement('div');
-    scanOverlay.className = 'scan-overlay';
-    scanOverlay.innerHTML = `
-        <div class="scan-header">
-            <h3>Scan Barcode or QR Code</h3>
-            <button class="scan-close">&times;</button>
-        </div>
-        <div class="scan-viewfinder" id="scanViewfinder"></div>
-        <div class="scan-controls">
-            <button id="scanCameraBtn">📷 Camera</button>
-            <button id="scanFileBtn">📁 Upload Image</button>
-        </div>
-        <div class="scan-status" id="scanStatus"></div>
-        <input type="file" id="scanFileInput" accept="image/*">
-    `;
-    document.body.appendChild(scanOverlay);
-
-    const scanCloseBtn = scanOverlay.querySelector('.scan-close');
-    const scanCameraBtn = document.getElementById('scanCameraBtn');
-    const scanFileBtn = document.getElementById('scanFileBtn');
-    const scanStatus = document.getElementById('scanStatus');
-    const scanFileInput = document.getElementById('scanFileInput');
-    const scanViewfinder = document.getElementById('scanViewfinder');
-
-    let html5Qrcode = null;
-    let isScannerRunning = false;
-    let nativeStream = null;
-    let nativeScanFrame = null;
-    const cameraAvailable = window.isSecureContext && !!navigator.mediaDevices;
-
-    const setScanStatus = (message, type = '') => {
-        scanStatus.textContent = message;
-        scanStatus.className = 'scan-status' + (type ? ' ' + type : '');
-    };
-
-    const onScanSuccess = (decodedText) => {
-        closeScanOverlay();
-        input.value = decodedText;
-        updateBarcode(decodedText, false);
-    };
-
-    // Lazy-load html5-qrcode from jsDelivr on first use
-    let html5QrcodeLoaded = typeof Html5Qrcode !== 'undefined';
-    const loadHtml5Qrcode = () => new Promise((resolve, reject) => {
-        if (html5QrcodeLoaded) { resolve(); return; }
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
-        script.onload = () => { html5QrcodeLoaded = true; resolve(); };
-        script.onerror = () => reject(new Error('Failed to load scanner library'));
-        document.head.appendChild(script);
-    });
-
-    const startCameraScanner = async () => {
-        if (!cameraAvailable) {
-            setScanStatus('Camera requires HTTPS or localhost. Upload an image instead.', 'error');
-            return;
-        }
-
-        if (isScannerRunning) {
-            await stopScanner();
-        }
-
-        setScanStatus('Starting camera...');
-
-        // Use native BarcodeDetector if available (handles any orientation)
-        if ('BarcodeDetector' in window) {
-            try {
-                nativeStream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' }
-                });
-
-                const video = document.createElement('video');
-                video.srcObject = nativeStream;
-                video.setAttribute('playsinline', 'true');
-                video.style.width = '100%';
-                video.style.height = '100%';
-                video.style.objectFit = 'cover';
-                scanViewfinder.appendChild(video);
-                await video.play();
-
-                const detector = new BarcodeDetector();
-                isScannerRunning = true;
-                scanCameraBtn.classList.add('active');
-                setScanStatus('Point camera at a barcode or QR code');
-
-                const scanLoop = async () => {
-                    if (!isScannerRunning) return;
-                    try {
-                        const barcodes = await detector.detect(video);
-                        if (barcodes.length > 0) {
-                            onScanSuccess(barcodes[0].rawValue);
-                            return;
-                        }
-                    } catch (e) {
-                        // Frame not ready, continue
-                    }
-                    nativeScanFrame = setTimeout(scanLoop, 100); // ~10fps
-                };
-                nativeScanFrame = setTimeout(scanLoop, 100);
-                return;
-            } catch (err) {
-                console.error('Native BarcodeDetector failed, falling back:', err);
-                if (nativeStream) {
-                    nativeStream.getTracks().forEach(track => track.stop());
-                    nativeStream = null;
-                }
-                scanViewfinder.innerHTML = '';
-            }
-        }
-
-        // Fallback to html5-qrcode (ZXing-based, horizontal barcodes only)
-        try {
-            await loadHtml5Qrcode();
-            html5Qrcode = new Html5Qrcode('scanViewfinder');
-            await html5Qrcode.start(
-                { facingMode: 'environment' },
-                { fps: 10 },
-                onScanSuccess,
-                () => {}
-            );
-
-            isScannerRunning = true;
-            scanCameraBtn.classList.add('active');
-            setScanStatus('Point camera at a barcode or QR code');
-        } catch (err) {
-            console.error('Camera start failed:', err);
-            const errStr = err.toString();
-            if (errStr.includes('NotAllowedError') || errStr.includes('Permission')) {
-                setScanStatus('Camera permission denied. Please allow camera access and try again.', 'error');
-            } else if (errStr.includes('NotFoundError') || errStr.includes('device')) {
-                setScanStatus('No camera found. Try uploading an image instead.', 'error');
-            } else {
-                setScanStatus('Could not start camera: ' + (err.message || err), 'error');
-            }
-        }
-    };
-
-    const stopScanner = async () => {
-        if (nativeScanFrame) {
-            clearTimeout(nativeScanFrame);
-            nativeScanFrame = null;
-        }
-        if (nativeStream) {
-            nativeStream.getTracks().forEach(track => track.stop());
-            nativeStream = null;
-        }
-        if (html5Qrcode && isScannerRunning) {
-            try {
-                await html5Qrcode.stop();
-            } catch (e) {
-                // May already be stopped
-            }
-        }
-        isScannerRunning = false;
-        scanCameraBtn.classList.remove('active');
-    };
-
-    const scanFromFile = async (file) => {
-        if (isScannerRunning) {
-            await stopScanner();
-        }
-
-        setScanStatus('Scanning image...', '');
-
-        // Try native BarcodeDetector first
-        if ('BarcodeDetector' in window) {
-            try {
-                const bitmap = await createImageBitmap(file);
-                const detector = new BarcodeDetector();
-                const barcodes = await detector.detect(bitmap);
-                bitmap.close();
-                if (barcodes.length > 0) {
-                    onScanSuccess(barcodes[0].rawValue);
-                    return;
-                }
-            } catch (e) {
-                // Fall through to html5-qrcode
-            }
-        }
-
-        // Fallback to html5-qrcode
-        try {
-            await loadHtml5Qrcode();
-        } catch {
-            setScanStatus('No barcode found. Scanner fallback failed to load.', 'error');
-            return;
-        }
-
-        if (!html5Qrcode) {
-            html5Qrcode = new Html5Qrcode('scanViewfinder');
-        }
-
-        try {
-            const result = await html5Qrcode.scanFile(file, true);
-            onScanSuccess(result);
-        } catch (err) {
-            setScanStatus('No barcode or QR code found in image. Try a clearer photo.', 'error');
-        }
-    };
-
-    const openScanOverlay = async () => {
-        const hasNative = 'BarcodeDetector' in window;
-        if (!hasNative) {
-            try {
-                setScanStatus('Loading scanner...');
-                await loadHtml5Qrcode();
-            } catch {
-                setScanStatus('Scanner library failed to load. Check your internet connection.', 'error');
-                return;
-            }
-        }
-        scanOverlay.classList.add('active');
-        document.body.style.overflow = 'hidden';
-        if (cameraAvailable) {
-            setScanStatus('');
-            startCameraScanner();
-        } else {
-            setScanStatus('Camera requires HTTPS or localhost. Upload an image instead.', 'error');
-        }
-        // Load fallback library in background for file scanning
-        if (!html5QrcodeLoaded) loadHtml5Qrcode().catch(() => {});
-    };
-
-    const closeScanOverlay = async () => {
-        if (!scanOverlay.classList.contains('active')) return;
-        scanOverlay.classList.remove('active');
-        document.body.style.overflow = '';
-        await stopScanner();
-        html5Qrcode = null;
-        scanViewfinder.innerHTML = '';
-        setScanStatus('');
-    };
-
-    scanButton.addEventListener('click', openScanOverlay);
-    scanCloseBtn.addEventListener('click', closeScanOverlay);
-
-    scanOverlay.addEventListener('click', (e) => {
-        if (e.target === scanOverlay) closeScanOverlay();
-    });
-
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && scanOverlay.classList.contains('active')) {
-            closeScanOverlay();
+    // Scanner module
+    const scanner = createScanner({
+        onResult: (decodedText) => {
+            input.value = decodedText;
+            updateBarcode(decodedText, false);
         }
     });
-
-    scanCameraBtn.addEventListener('click', () => startCameraScanner());
-
-    scanFileBtn.addEventListener('click', () => scanFileInput.click());
-
-    scanFileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) scanFromFile(file);
-        scanFileInput.value = '';
-    });
+    scanButton.addEventListener('click', () => scanner.open());
 
     // Modal elements
     const modalTitle = document.getElementById('modalTitle');
@@ -313,38 +69,6 @@ window.onload = () => {
     const editSecretToggle = document.getElementById('editSecretToggle');
     const cancelModal = document.getElementById('cancelModal');
     const confirmModal = document.getElementById('confirmModal');
-
-    // Load history from localStorage (supports folders)
-    const loadHistory = () => {
-        const savedHistory = localStorage.getItem('barcodeHistory');
-        if (!savedHistory) return [{ text: defaultText, alias: null, isSecret: false }];
-        try {
-            const parsed = JSON.parse(savedHistory);
-            if (!Array.isArray(parsed)) return [{ text: defaultText, alias: null, isSecret: false }];
-            const migrateItem = (item) => {
-                // Migrate old displayName format to alias/isSecret
-                if (item.displayName !== undefined) {
-                    return { text: item.text || '', alias: item.displayName || null, isSecret: !!item.displayName, format: item.format || 'barcode' };
-                }
-                return { text: item.text || '', alias: item.alias || null, isSecret: !!item.isSecret, format: item.format || 'barcode' };
-            };
-            return parsed.map(item => {
-                if (item.type === 'folder') {
-                    return {
-                        type: 'folder',
-                        name: item.name || 'Unnamed',
-                        collapsed: !!item.collapsed,
-                        items: Array.isArray(item.items)
-                            ? item.items.map(migrateItem)
-                            : []
-                    };
-                }
-                return migrateItem(item);
-            }).filter(item => item.type === 'folder' || item.text);
-        } catch (e) {
-            return [{ text: defaultText, alias: null, isSecret: false, format: 'barcode' }];
-        }
-    };
 
     // Save history to localStorage - walks DOM tree for folder structure
     const saveHistory = () => {
@@ -375,7 +99,7 @@ window.onload = () => {
                 });
             }
         });
-        localStorage.setItem('barcodeHistory', JSON.stringify(result));
+        persistHistory(result);
     };
 
     // Keep track of current barcode text, secret status, and format
@@ -397,80 +121,119 @@ window.onload = () => {
         return 'barcode';
     };
 
-    // Function to update barcode or QR code
-    const updateBarcode = (text, isSecret = false, format = 'barcode') => {
-        if (text !== '') {
-            try {
-                currentBarcodeText = text;
-                isCurrentBarcodeSecret = isSecret;
-                currentBarcodeFormat = format;
-
-                const barcodeImg = document.getElementById('barcode');
-                const isFullscreen = barcodeContainer.classList.contains('fullscreen');
-
-                if (format === 'qr') {
-                    barcodeImg.removeAttribute('width');
-                    barcodeImg.removeAttribute('height');
-                    const qr = qrcode(0, 'M');
-                    qr.addData(text);
-                    qr.make();
-                    const cellSize = isFullscreen ? 8 : 4;
-                    const margin = isFullscreen ? 4 : 2;
-                    barcodeImg.src = qr.createDataURL(cellSize, margin);
-                    barcodeContainer.classList.add('qr-mode');
+    // Renderer registry -- each format knows how to render itself
+    const renderers = {
+        barcode: {
+            cssClass: null,
+            render(img, text, isSecret, isFullscreen) {
+                const options = { ...barcodeOptions, displayValue: !isSecret };
+                if (isFullscreen) {
+                    JsBarcode("#barcode", text, { ...options, width: 2, height: 200, fontSize: 30, margin: 10 });
                 } else {
-                    barcodeContainer.classList.remove('qr-mode');
-                    const options = {
-                        ...barcodeOptions,
-                        displayValue: !isSecret
-                    };
-                    if (isFullscreen) {
-                        JsBarcode("#barcode", text, {
-                            ...options,
-                            width: 2,
-                            height: 200,
-                            fontSize: 30,
-                            margin: 10
-                        });
-                    } else {
-                        JsBarcode("#barcode", text, options);
-                    }
+                    JsBarcode("#barcode", text, options);
                 }
-            } catch (error) {
-                console.error('Failed to generate code:', error);
+            }
+        },
+        qr: {
+            cssClass: 'qr-mode',
+            render(img, text, isSecret, isFullscreen) {
+                img.removeAttribute('width');
+                img.removeAttribute('height');
+                const qr = qrcode(0, 'M');
+                qr.addData(text);
+                qr.make();
+                const cellSize = isFullscreen ? 8 : 4;
+                const margin = isFullscreen ? 4 : 2;
+                img.src = qr.createDataURL(cellSize, margin);
+            }
+        },
+        image: {
+            cssClass: 'image-mode',
+            render(img, text) {
+                img.removeAttribute('width');
+                img.removeAttribute('height');
+                img.src = text;
             }
         }
     };
 
-    // Show modal function - extended with list selection mode
-    const showModal = ({ title, inputMode, listItems, confirmText, onConfirm }) => {
+    const allFormatClasses = Object.values(renderers).map(r => r.cssClass).filter(Boolean);
+
+    // Function to update barcode or QR code
+    const updateBarcode = (text, isSecret = false, format = 'barcode') => {
+        if (text === '') return;
+        try {
+            currentBarcodeText = text;
+            isCurrentBarcodeSecret = isSecret;
+            currentBarcodeFormat = format;
+
+            const barcodeImg = document.getElementById('barcode');
+            const isFullscreen = barcodeContainer.classList.contains('fullscreen');
+            const renderer = renderers[format] || renderers.barcode;
+
+            allFormatClasses.forEach(cls => barcodeContainer.classList.remove(cls));
+            if (renderer.cssClass) barcodeContainer.classList.add(renderer.cssClass);
+
+            renderer.render(barcodeImg, text, isSecret, isFullscreen);
+        } catch (error) {
+            console.error('Failed to generate code:', error);
+        }
+    };
+
+    // Unified modal function -- handles input, list, edit, and confirm modes
+    const showModal = ({ title, inputMode, listItems, editMode, confirmText, onConfirm }) => {
+        // Reset all sections
         modalTitle.textContent = title;
         displayNameInput.style.display = inputMode ? 'block' : 'none';
         modalList.style.display = listItems ? 'flex' : 'none';
         modalList.innerHTML = '';
-        editFields.style.display = 'none';
+        editFields.style.display = editMode ? 'flex' : 'none';
         confirmModal.textContent = confirmText || 'Save';
+        confirmModal.className = '';
 
+        // Pre-populate edit fields if provided
+        if (editMode) {
+            editTextInput.value = editMode.text || '';
+            editAliasInput.value = editMode.alias || '';
+            editSecretToggle.checked = !!editMode.isSecret;
+        }
 
         modal.style.display = 'flex';
         if (inputMode) {
             displayNameInput.value = '';
             displayNameInput.focus();
+        } else if (editMode) {
+            editTextInput.focus();
         }
 
+        // Single cleanup path for all modes
         let cleaned = false;
         const cleanup = () => {
             if (cleaned) return;
             cleaned = true;
+            editFields.style.display = 'none';
             confirmModal.removeEventListener('click', handleConfirm);
             cancelModal.removeEventListener('click', handleCancel);
-            if (inputMode) {
-                displayNameInput.removeEventListener('keypress', handleEnter);
+            displayNameInput.removeEventListener('keypress', handleEnter);
+            editTextInput.removeEventListener('keypress', handleEnter);
+            editAliasInput.removeEventListener('keypress', handleEnter);
+        };
+
+        const getResult = () => {
+            if (editMode) {
+                return {
+                    text: editTextInput.value.trim(),
+                    alias: editAliasInput.value.trim(),
+                    isSecret: editSecretToggle.checked
+                };
             }
+            return displayNameInput.value.trim();
         };
 
         const handleConfirm = () => {
-            onConfirm(displayNameInput.value.trim());
+            const result = getResult();
+            if (editMode && !result.text) { cleanup(); modal.style.display = 'none'; return; }
+            onConfirm(result);
             modal.style.display = 'none';
             cleanup();
         };
@@ -505,64 +268,33 @@ window.onload = () => {
             confirmModal.style.display = 'block';
             confirmModal.addEventListener('click', handleConfirm);
             cancelModal.addEventListener('click', handleCancel);
-            if (inputMode) {
-                displayNameInput.addEventListener('keypress', handleEnter);
+            if (inputMode) displayNameInput.addEventListener('keypress', handleEnter);
+            if (editMode) {
+                editTextInput.addEventListener('keypress', handleEnter);
+                editAliasInput.addEventListener('keypress', handleEnter);
             }
         }
     };
 
-    // Edit modal for double-tap
-    const openEditModal = (button, historyItem) => {
-        modalTitle.textContent = 'Edit Barcode';
-        displayNameInput.style.display = 'none';
-        editFields.style.display = 'flex';
-        confirmModal.textContent = 'Save';
-        confirmModal.className = '';
-
-        editTextInput.value = button.dataset.originalText;
-        editAliasInput.value = button.dataset.alias || '';
-        editSecretToggle.checked = button.dataset.isSecret === 'true';
-
-        modal.style.display = 'flex';
-        editTextInput.focus();
-
-        const handleEnter = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                handleConfirm();
+    // Edit modal for double-tap -- uses showModal with editMode
+    const openEditModal = (button) => {
+        showModal({
+            title: 'Edit Barcode',
+            editMode: {
+                text: button.dataset.originalText,
+                alias: button.dataset.alias || '',
+                isSecret: button.dataset.isSecret === 'true'
+            },
+            confirmText: 'Save',
+            onConfirm: (result) => {
+                button.dataset.originalText = result.text;
+                button.dataset.alias = result.alias || '';
+                button.dataset.isSecret = result.isSecret ? 'true' : 'false';
+                renderButtonContent(button);
+                updateBarcode(result.text, result.isSecret, button.dataset.format || 'barcode');
+                saveHistory();
             }
-        };
-
-        const handleConfirm = () => {
-            const newText = editTextInput.value.trim();
-            if (!newText) { cleanup(); modal.style.display = 'none'; return; }
-            button.dataset.originalText = newText;
-            button.dataset.alias = editAliasInput.value.trim() || '';
-            button.dataset.isSecret = editSecretToggle.checked ? 'true' : 'false';
-            renderButtonContent(button);
-            updateBarcode(newText, editSecretToggle.checked, button.dataset.format || 'barcode');
-            saveHistory();
-            modal.style.display = 'none';
-            cleanup();
-        };
-
-        const handleCancel = () => {
-            modal.style.display = 'none';
-            cleanup();
-        };
-
-        const cleanup = () => {
-            editFields.style.display = 'none';
-            confirmModal.removeEventListener('click', handleConfirm);
-            cancelModal.removeEventListener('click', handleCancel);
-            editTextInput.removeEventListener('keypress', handleEnter);
-            editAliasInput.removeEventListener('keypress', handleEnter);
-        };
-
-        confirmModal.addEventListener('click', handleConfirm);
-        cancelModal.addEventListener('click', handleCancel);
-        editTextInput.addEventListener('keypress', handleEnter);
-        editAliasInput.addEventListener('keypress', handleEnter);
+        });
     };
 
     // Delete handler for history items
@@ -752,238 +484,10 @@ window.onload = () => {
         });
     });
 
-    // Add touch drag support
-    let touchDragItem = null;
-    let touchStartY = 0;
-    let dragSourceFolder = null;
-    let lastMovedOutOfFolder = null; // Anti-bounce: tracks folder we just moved out of
-
-    // Update folder highlights during drag (green on destination, red on source)
-    const updateDragFolderHighlights = (draggingItem) => {
-        document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
-        const currentFolder = draggingItem.closest('.folder');
-        if (currentFolder && currentFolder !== dragSourceFolder) {
-            currentFolder.classList.add('folder-drop-target');
-        }
-        if (dragSourceFolder) {
-            if (currentFolder === dragSourceFolder) {
-                dragSourceFolder.classList.remove('folder-drag-source');
-            } else {
-                dragSourceFolder.classList.add('folder-drag-source');
-            }
-        }
-    };
-
-    // --- Shared drag helpers (used by both desktop and touch) ---
-
-    const startDrag = (item) => {
-        item.classList.add('dragging');
-        dragSourceFolder = item.classList.contains('folder') ? null : item.closest('.folder');
-        if (dragSourceFolder) dragSourceFolder.classList.add('folder-drag-source');
-        lastMovedOutOfFolder = null;
-    };
-
-    const endDrag = (item) => {
-        if (item) item.classList.remove('dragging');
-        document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
-        document.querySelectorAll('.folder-drag-source').forEach(f => f.classList.remove('folder-drag-source'));
-        dragSourceFolder = null;
-        lastMovedOutOfFolder = null;
-        saveHistory();
-    };
-
-    const moveItemIntoFolder = (item, folder) => {
-        const oldFolder = item.closest('.folder');
-        const folderItemsEl = folder.querySelector('.folder-items');
-        folderItemsEl.insertBefore(item, folderItemsEl.firstChild);
-        if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-        updateFolderCount(folder);
-        if (oldFolder) updateFolderCount(oldFolder);
-        lastMovedOutOfFolder = null;
-        updateDragFolderHighlights(item);
-    };
-
-    const moveItemOutOfFolder = (item, folder) => {
-        historyContainer.insertBefore(item, folder);
-        lastMovedOutOfFolder = folder;
-        updateFolderCount(folder);
-        updateDragFolderHighlights(item);
-    };
-
-    const reorderItem = (draggingItem, targetItem, clientY) => {
-        const targetContainer = targetItem.parentNode;
-        const dragContainer = draggingItem.parentNode;
-
-        if (dragContainer !== targetContainer) {
-            const oldFolder = draggingItem.closest('.folder');
-            const rect = targetItem.getBoundingClientRect();
-            const midY = rect.top + rect.height / 2;
-            if (clientY < midY) {
-                targetContainer.insertBefore(draggingItem, targetItem);
-            } else {
-                targetContainer.insertBefore(draggingItem, targetItem.nextSibling);
-            }
-            if (oldFolder) updateFolderCount(oldFolder);
-            const newFolder = draggingItem.closest('.folder');
-            if (newFolder) updateFolderCount(newFolder);
-            lastMovedOutOfFolder = null;
-            updateDragFolderHighlights(draggingItem);
-        } else {
-            const siblings = [...targetContainer.children].filter(el =>
-                el.classList.contains('history-item') || el.classList.contains('folder'));
-            const currentIndex = siblings.indexOf(draggingItem);
-            const targetIndex = siblings.indexOf(targetItem);
-            if (targetIndex < currentIndex) {
-                targetContainer.insertBefore(draggingItem, targetItem);
-            } else {
-                targetContainer.insertBefore(draggingItem, targetItem.nextSibling);
-            }
-        }
-    };
-
-    const reorderTopLevel = (draggingEl, referenceEl) => {
-        const topLevel = [...historyContainer.children].filter(el =>
-            el.classList.contains('history-item') || el.classList.contains('folder'));
-        const draggingPos = topLevel.indexOf(draggingEl);
-        const referencePos = topLevel.indexOf(referenceEl);
-        if (referencePos < draggingPos) {
-            historyContainer.insertBefore(draggingEl, referenceEl);
-        } else {
-            historyContainer.insertBefore(draggingEl, referenceEl.nextSibling);
-        }
-    };
-
-    const moveItemToTopLevel = (item, clientY) => {
-        const oldFolder = item.closest('.folder');
-        if (!oldFolder) return;
-        const topLevel = [...historyContainer.children].filter(el =>
-            el.classList.contains('history-item') || el.classList.contains('folder'));
-        let inserted = false;
-        for (const child of topLevel) {
-            const rect = child.getBoundingClientRect();
-            if (clientY < rect.top + rect.height / 2) {
-                historyContainer.insertBefore(item, child);
-                inserted = true;
-                break;
-            }
-        }
-        if (!inserted) historyContainer.appendChild(item);
-        updateFolderCount(oldFolder);
-        updateDragFolderHighlights(item);
-    };
-
-    // --- Touch drag handlers (decomposed from single monolith) ---
-
-    const handleTouchStart = (e, item) => {
-        touchDragItem = item;
-        touchStartY = e.touches[0].clientY;
-        startDrag(item);
-    };
-
-    const tryTouchFolderHeader = (touchY) => {
-        const folders = [...historyContainer.querySelectorAll('.folder')];
-        for (const folder of folders) {
-            const header = folder.querySelector('.folder-header');
-            const headerRect = header.getBoundingClientRect();
-            if (touchY >= headerRect.top && touchY <= headerRect.bottom) {
-                const folderItemsEl = folder.querySelector('.folder-items');
-                if (touchDragItem.parentNode === folderItemsEl) {
-                    moveItemOutOfFolder(touchDragItem, folder);
-                } else if (lastMovedOutOfFolder !== folder) {
-                    moveItemIntoFolder(touchDragItem, folder);
-                }
-                return true;
-            }
-        }
-        return false;
-    };
-
-    const tryTouchItemReorder = (touchY) => {
-        const allItems = [...document.querySelectorAll('.history-item:not(.dragging)')];
-        for (const item of allItems) {
-            const rect = item.getBoundingClientRect();
-            if (touchY >= rect.top && touchY <= rect.bottom) {
-                reorderItem(touchDragItem, item, touchY);
-                return true;
-            }
-        }
-        return false;
-    };
-
-    const tryTouchEmptyFolder = (touchY) => {
-        const folders = [...historyContainer.querySelectorAll('.folder')];
-        for (const folder of folders) {
-            const folderRect = folder.getBoundingClientRect();
-            if (touchY >= folderRect.top && touchY <= folderRect.bottom) {
-                const folderItemsEl = folder.querySelector('.folder-items');
-                if (touchDragItem.parentNode === folderItemsEl) return true;
-                if (lastMovedOutOfFolder === folder) return true;
-                moveItemIntoFolder(touchDragItem, folder);
-                return true;
-            }
-        }
-        return false;
-    };
-
-    const handleTouchMove = (e) => {
-        if (!touchDragItem) return;
-        e.preventDefault();
-        const touchY = e.touches[0].clientY;
-
-        if (touchDragItem.classList.contains('folder')) {
-            // Folder dragging: only reorder at top level
-            const topLevel = [...historyContainer.children].filter(el =>
-                el.classList.contains('history-item') || el.classList.contains('folder'));
-            for (const child of topLevel) {
-                if (child === touchDragItem) continue;
-                const rect = child.getBoundingClientRect();
-                if (touchY >= rect.top && touchY <= rect.bottom) {
-                    reorderTopLevel(touchDragItem, child);
-                    return;
-                }
-            }
-            return;
-        }
-
-        // Item dragging: try each phase in priority order
-        if (tryTouchFolderHeader(touchY)) return;
-        if (tryTouchItemReorder(touchY)) return;
-        if (tryTouchEmptyFolder(touchY)) return;
-        if (touchDragItem.closest('.folder')) moveItemToTopLevel(touchDragItem, touchY);
-    };
-
-    const handleTouchEnd = () => {
-        if (!touchDragItem) return;
-        const item = touchDragItem;
-        touchDragItem = null;
-        endDrag(item);
-    };
-
-    // Add touch event listeners to history container
-    historyContainer.addEventListener('touchmove', handleTouchMove, { passive: false });
-    historyContainer.addEventListener('touchend', handleTouchEnd);
-
-    // Define touch handlers before addToHistory
-    const addTouchHandlers = (historyItem) => {
-        historyItem.addEventListener('touchstart', (e) => {
-            const startY = e.touches[0].clientY;
-            const touchTimer = setTimeout(() => {
-                handleTouchStart(e, historyItem);
-            }, 200);
-
-            const onMove = (moveE) => {
-                if (Math.abs(moveE.touches[0].clientY - startY) > 10) {
-                    clearTimeout(touchTimer);
-                    historyItem.removeEventListener('touchmove', onMove);
-                }
-            };
-            historyItem.addEventListener('touchmove', onMove);
-            historyItem.addEventListener('touchend', () => {
-                clearTimeout(touchTimer);
-                historyItem.removeEventListener('touchmove', onMove);
-            }, { once: true });
-        });
-    };
+    // Initialize drag system
+    const { setupItemDrag, setupFolderDrag } = createDragSystem({
+        historyContainer, saveHistory, updateFolderCount
+    });
 
     // Helper function to highlight trailing whitespace
     const highlightTrailingWhitespace = (text) => {
@@ -1022,39 +526,8 @@ window.onload = () => {
         }
     };
 
-    // Modified addToHistory function - supports format and target container for folders
-    const addToHistory = (text, alias = null, isSecret = false, format = 'barcode', targetContainer = null) => {
-        const container = targetContainer || historyContainer;
-        const historyItem = document.createElement('div');
-        historyItem.className = 'history-item';
-
-        // Only enable drag on non-touch devices
-        if (!('ontouchstart' in window)) {
-            historyItem.draggable = true;
-
-            historyItem.addEventListener('dragstart', (e) => {
-                e.stopPropagation();
-                startDrag(historyItem);
-                e.dataTransfer.effectAllowed = 'move';
-            });
-
-            historyItem.addEventListener('dragend', (e) => {
-                e.stopPropagation();
-                endDrag(historyItem);
-            });
-
-            historyItem.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const draggingItem = document.querySelector('.history-item.dragging');
-                if (!draggingItem || draggingItem === historyItem) return;
-                reorderItem(draggingItem, historyItem, e.clientY);
-            });
-        } else {
-            // Add touch handlers for touch devices
-            addTouchHandlers(historyItem);
-        }
-
+    // Create the main barcode/QR button for a history item
+    const createHistoryButton = (text, alias, isSecret, format) => {
         const button = document.createElement('button');
         button.className = 'history-button';
         button.dataset.originalText = text;
@@ -1062,51 +535,56 @@ window.onload = () => {
         button.dataset.isSecret = isSecret ? 'true' : 'false';
         button.dataset.format = format;
         renderButtonContent(button);
-        if (format === 'qr') {
-            button.classList.add('qr-item');
-        }
+        if (format === 'qr') button.classList.add('qr-item');
+        else if (format === 'image') button.classList.add('image-item');
 
         button.onclick = () => {
             const fmt = button.dataset.format || 'barcode';
             updateToggleUI(fmt);
             updateBarcode(button.dataset.originalText, button.dataset.isSecret === 'true', fmt);
         };
+        return button;
+    };
 
-        // Double-tap to edit (mobile)
+    // Set up double-tap/double-click to edit
+    const setupEditHandlers = (button) => {
         let lastTapTime = 0;
         button.addEventListener('touchend', (e) => {
             const now = Date.now();
             if (now - lastTapTime < 300) {
                 e.preventDefault();
-                openEditModal(button, historyItem);
+                openEditModal(button);
             }
             lastTapTime = now;
         });
-        // Double-click to edit (desktop)
         button.addEventListener('dblclick', (e) => {
             e.preventDefault();
-            openEditModal(button, historyItem);
+            openEditModal(button);
         });
+    };
+
+    // Add a history item to the given container
+    const addToHistory = (text, alias = null, isSecret = false, format = 'barcode', targetContainer = null) => {
+        const container = targetContainer || historyContainer;
+        const historyItem = document.createElement('div');
+        historyItem.className = 'history-item';
+
+        setupItemDrag(historyItem);
+
+        const button = createHistoryButton(text, alias, isSecret, format);
+        setupEditHandlers(button);
 
         const moveButton = document.createElement('button');
         moveButton.className = 'move-button';
         moveButton.textContent = '\u25B8';
-        moveButton.onclick = (e) => {
-            e.stopPropagation();
-            showMoveModal(historyItem);
-        };
+        moveButton.onclick = (e) => { e.stopPropagation(); showMoveModal(historyItem); };
 
         const deleteButton = document.createElement('button');
         deleteButton.className = 'delete-button';
         deleteButton.textContent = '\u00D7';
-        deleteButton.onclick = (e) => {
-            e.stopPropagation();
-            handleDelete(historyItem, alias);
-        };
+        deleteButton.onclick = (e) => { e.stopPropagation(); handleDelete(historyItem, alias); };
 
-        historyItem.appendChild(button);
-        historyItem.appendChild(moveButton);
-        historyItem.appendChild(deleteButton);
+        historyItem.append(button, moveButton, deleteButton);
         container.insertBefore(historyItem, container.firstChild);
         saveHistory();
     };
@@ -1158,64 +636,7 @@ window.onload = () => {
         folder.appendChild(header);
         folder.appendChild(folderItemsEl);
 
-        // Make folder draggable at top level
-        if (!('ontouchstart' in window)) {
-            folder.draggable = true;
-
-            folder.addEventListener('dragstart', (e) => {
-                startDrag(folder);
-                e.dataTransfer.effectAllowed = 'move';
-            });
-
-            folder.addEventListener('dragend', () => {
-                endDrag(folder);
-            });
-
-            folder.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                const dragging = document.querySelector('.history-item.dragging');
-                if (!dragging) return;
-                if (dragging.parentNode === folderItemsEl) return;
-                if (lastMovedOutOfFolder === folder) return;
-                moveItemIntoFolder(dragging, folder);
-            });
-
-            header.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const dragging = document.querySelector('.dragging');
-                if (!dragging || dragging === folder) return;
-
-                if (dragging.classList.contains('history-item')) {
-                    if (dragging.parentNode === folderItemsEl) {
-                        moveItemOutOfFolder(dragging, folder);
-                    } else if (lastMovedOutOfFolder !== folder) {
-                        moveItemIntoFolder(dragging, folder);
-                    }
-                } else if (dragging.classList.contains('folder') && dragging.parentNode === historyContainer) {
-                    reorderTopLevel(dragging, folder);
-                }
-            });
-        } else {
-            // Touch drag for folder reordering via header
-            header.addEventListener('touchstart', (e) => {
-                const startY = e.touches[0].clientY;
-                const touchTimer = setTimeout(() => {
-                    handleTouchStart(e, folder);
-                }, 200);
-                const onMove = (moveE) => {
-                    if (Math.abs(moveE.touches[0].clientY - startY) > 10) {
-                        clearTimeout(touchTimer);
-                        header.removeEventListener('touchmove', onMove);
-                    }
-                };
-                header.addEventListener('touchmove', onMove);
-                header.addEventListener('touchend', () => {
-                    clearTimeout(touchTimer);
-                    header.removeEventListener('touchmove', onMove);
-                }, { once: true });
-            });
-        }
+        setupFolderDrag(folder, header, folderItemsEl);
 
         historyContainer.insertBefore(folder, historyContainer.firstChild);
 
@@ -1276,6 +697,7 @@ window.onload = () => {
         currentFormat = format;
         formatToggleBtn.classList.toggle('active', format === 'barcode');
         formatToggleQRBtn.classList.toggle('active', format === 'qr');
+        // Image format: neither toggle is active
     };
 
     const setFormat = (format) => {
@@ -1295,28 +717,38 @@ window.onload = () => {
         setFormat('qr');
     });
 
-    // Initialize history from localStorage
-    const savedHistory = loadHistory();
-    savedHistory.reverse().forEach(item => {
-        if (item.type === 'folder') {
-            addFolder(item.name, item.items || [], item.collapsed || false);
-        } else {
-            addToHistory(item.text, item.alias, item.isSecret, item.format || 'barcode');
+    // Reset to defaults button
+    document.getElementById('resetButton').addEventListener('click', () => {
+        if (confirm('Reset all saved barcodes to defaults? This cannot be undone.')) {
+            clearHistory();
+            location.reload();
         }
     });
 
-    // Show the most recent barcode and restore its format
-    if (savedHistory.length > 0) {
-        const lastItem = savedHistory[savedHistory.length - 1];
-        if (lastItem.type === 'folder') {
-            if (lastItem.items && lastItem.items.length > 0) {
-                const last = lastItem.items[lastItem.items.length - 1];
-                setFormat(last.format || 'barcode');
-                updateBarcode(last.text, last.isSecret, last.format || 'barcode');
+    // Initialize history from localStorage or config.json
+    (async () => {
+        const savedHistory = await loadHistory();
+        savedHistory.reverse().forEach(item => {
+            if (item.type === 'folder') {
+                addFolder(item.name, item.items || [], item.collapsed || false);
+            } else {
+                addToHistory(item.text, item.alias, item.isSecret, item.format || 'barcode');
             }
-        } else {
-            setFormat(lastItem.format || 'barcode');
-            updateBarcode(lastItem.text, lastItem.isSecret, lastItem.format || 'barcode');
+        });
+
+        // Show the most recent barcode and restore its format
+        if (savedHistory.length > 0) {
+            const lastItem = savedHistory[savedHistory.length - 1];
+            if (lastItem.type === 'folder') {
+                if (lastItem.items && lastItem.items.length > 0) {
+                    const last = lastItem.items[lastItem.items.length - 1];
+                    setFormat(last.format || 'barcode');
+                    updateBarcode(last.text, last.isSecret, last.format || 'barcode');
+                }
+            } else {
+                setFormat(lastItem.format || 'barcode');
+                updateBarcode(lastItem.text, lastItem.isSecret, lastItem.format || 'barcode');
+            }
         }
-    }
+    })();
 };

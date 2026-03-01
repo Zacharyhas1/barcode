@@ -1,0 +1,52 @@
+{
+  "barcodes": [
+    {
+      "type": "folder",
+      "name": "Robust Commands",
+      "collapsed": false,
+      "items": [
+        {"text": "robust reconfigure", "format": "barcode"},
+        {"text": "robust start", "format": "barcode"},
+        {"text": "robust stop", "format": "barcode"},
+        {"text": "robust status", "format": "barcode"}
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Carter Barcode setup",
+      "collapsed": false,
+      "items": [
+        {
+          "text": "barcodes/usb_hid_keyboard.png",
+          "alias": "USB HID Keyboard",
+          "format": "image"
+        },
+        {
+          "text": "barcodes/scan_options.png",
+          "alias": "Scan Options",
+          "format": "image"
+        },
+        {
+          "text": "barcodes/data_suffix.png",
+          "alias": "Data Suffix",
+          "format": "image"
+        },
+        {
+          "text": "barcodes/enter.png",
+          "alias": "Enter",
+          "format": "image"
+        },
+        {
+          "text": "barcodes/factory_defaults.png",
+          "alias": "Factory Defaults",
+          "format": "image"
+        },
+        {
+          "text": "barcodes/disable_qr.png",
+          "alias": "(Optional) Disable QR Code",
+          "format": "image"
+        }
+      ]
+    }
+  ]
+}

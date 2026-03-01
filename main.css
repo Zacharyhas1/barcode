@@ -261,6 +261,24 @@ textarea:focus {
     color: #7aa2f7;  /* Highlight important words */
 }
 
+#resetButton {
+    display: block;
+    margin-top: 8px;
+    padding: 4px 8px;
+    font-size: 9px;
+    color: #565f89;
+    background: transparent;
+    border: 1px solid #414868;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+#resetButton:hover {
+    color: #f7768e;
+    border-color: #f7768e;
+}
+
 .modal-content.delete-mode {
     border-left: 4px solid #f7768e;
 }
@@ -332,6 +350,27 @@ textarea:focus {
 /* QR history item indicator */
 .history-button.qr-item::before {
     content: 'QR ';
+    opacity: 0.5;
+}
+
+/* Image mode: keep rotation, fit image in sidebar */
+.image-mode #barcode {
+    height: 80px;
+    width: auto;
+    max-width: none;
+}
+
+.fullscreen.image-mode #barcode {
+    height: auto;
+    width: auto;
+    max-height: 90vw;
+    max-width: 90vh;
+    object-fit: contain;
+}
+
+/* Image history item indicator */
+.history-button.image-item::before {
+    content: 'IMG ';
     opacity: 0.5;
 }
 
