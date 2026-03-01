@@ -274,6 +274,165 @@ textarea:focus {
 }
 
 .trailing-space {
-    background: #4d5269; 
+    background: #4d5269;
     border-radius: 2px;
-} 
+}
+
+/* Folders */
+.folder {
+    border-left: 3px solid #7aa2f7;
+    border-radius: 6px;
+    background: #1a1b2e;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.folder.dragging {
+    opacity: 0.5;
+}
+
+.folder.folder-drop-target {
+    border-color: #9ece6a;
+    background: #1a2e1a;
+}
+
+.folder.folder-drop-target > .folder-header {
+    background: #292e42;
+}
+
+.folder.folder-drag-source {
+    border-color: #f7768e;
+    background: #2e1a1a;
+}
+
+.folder.folder-drag-source > .folder-header {
+    background: #2e1a1a;
+}
+
+.folder-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+}
+
+.folder-header:hover {
+    background: #292e42;
+}
+
+.folder-header .delete-button {
+    width: 24px;
+    height: 24px;
+    font-size: 14px;
+}
+
+.folder-toggle {
+    font-size: 10px;
+    color: #7aa2f7;
+    transition: transform 0.2s;
+    width: 12px;
+    display: inline-block;
+    text-align: center;
+}
+
+.folder.collapsed .folder-toggle {
+    transform: rotate(-90deg);
+}
+
+.folder-name {
+    flex: 1;
+    font-size: 10px;
+    color: #7aa2f7;
+    font-weight: bold;
+}
+
+.folder-count {
+    font-size: 9px;
+    color: #565f89;
+    background: #292e42;
+    padding: 1px 6px;
+    border-radius: 10px;
+}
+
+.folder-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 4px 4px 12px;
+    max-height: 500px;
+    overflow-y: auto;
+    opacity: 1;
+    transition: max-height 0.2s ease, padding 0.2s ease, opacity 0.15s ease;
+}
+
+.folder.collapsed .folder-items {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    overflow: hidden;
+}
+
+/* Move button */
+.move-button {
+    width: 32px;
+    border: 1px solid #414868;
+    border-radius: 6px;
+    background: #1f2335;
+    color: #7aa2f7;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.move-button:hover {
+    border-color: #7aa2f7;
+    background: #292e42;
+}
+
+/* New folder button */
+#newFolderButton {
+    width: 32px;
+    border: none;
+    border-radius: 6px;
+    background: #414868;
+    color: #a9b1d6;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#newFolderButton:hover {
+    background: #565f89;
+}
+
+/* Modal list mode */
+.modal-list {
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+
+.modal-list-option {
+    padding: 10px 12px;
+    border: 1px solid #414868;
+    border-radius: 6px;
+    background: #1a1b26;
+    color: #a9b1d6;
+    font-size: 10px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    transition: all 0.2s;
+}
+
+.modal-list-option:hover {
+    border-color: #7aa2f7;
+    background: #292e42;
+}
