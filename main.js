@@ -28,6 +28,11 @@ window.onload = () => {
         <div class="modal-content">
             <h3 id="modalTitle">Set Display Name</h3>
             <input type="text" id="displayNameInput" placeholder="Enter display name...">
+            <div id="editFields" class="edit-fields" style="display:none">
+                <input type="text" id="editTextInput" placeholder="Barcode text...">
+                <input type="text" id="editAliasInput" placeholder="Alias (optional)...">
+                <label class="secret-toggle"><input type="checkbox" id="editSecretToggle"> Hide barcode text</label>
+            </div>
             <div class="modal-buttons">
                 <button id="cancelModal">Cancel</button>
                 <button id="confirmModal">Save</button>
@@ -39,6 +44,10 @@ window.onload = () => {
     // Modal elements
     const modalTitle = document.getElementById('modalTitle');
     const displayNameInput = document.getElementById('displayNameInput');
+    const editFields = document.getElementById('editFields');
+    const editTextInput = document.getElementById('editTextInput');
+    const editAliasInput = document.getElementById('editAliasInput');
+    const editSecretToggle = document.getElementById('editSecretToggle');
     const cancelModal = document.getElementById('cancelModal');
     const confirmModal = document.getElementById('confirmModal');
 
@@ -47,20 +56,32 @@ window.onload = () => {
         const savedHistory = localStorage.getItem('barcodeHistory');
         if (savedHistory) {
             const items = JSON.parse(savedHistory);
-            return items.map(item => ({
-                text: item.text,
-                displayName: item.displayName
-            }));
+            return items.map(item => {
+                // Migrate old displayName format to alias/isSecret
+                if (item.displayName !== undefined) {
+                    return {
+                        text: item.text,
+                        alias: item.displayName || null,
+                        isSecret: !!item.displayName
+                    };
+                }
+                return {
+                    text: item.text,
+                    alias: item.alias || null,
+                    isSecret: !!item.isSecret
+                };
+            });
         }
-        return [{ text: defaultText, displayName: null }];
+        return [{ text: defaultText, alias: null, isSecret: false }];
     };
 
     // Save history to localStorage
     const saveHistory = () => {
         const historyItems = Array.from(historyContainer.querySelectorAll('.history-button'))
             .map(button => ({
-                text: button.dataset.secret || button.dataset.originalText,
-                displayName: button.dataset.secret ? button.textContent : null
+                text: button.dataset.originalText,
+                alias: button.dataset.alias || null,
+                isSecret: button.dataset.isSecret === 'true'
             }));
         localStorage.setItem('barcodeHistory', JSON.stringify(historyItems));
     };
@@ -122,6 +143,7 @@ window.onload = () => {
     const showModal = ({ title, inputMode, confirmText, onConfirm }) => {
         modalTitle.textContent = title;
         displayNameInput.style.display = inputMode ? 'block' : 'none';
+        editFields.style.display = 'none';
         confirmModal.textContent = confirmText;
         
         modal.style.display = 'flex';
@@ -165,9 +187,64 @@ window.onload = () => {
         }
     };
 
+    // Edit modal for double-tap
+    const openEditModal = (button, historyItem) => {
+        modalTitle.textContent = 'Edit Barcode';
+        displayNameInput.style.display = 'none';
+        editFields.style.display = 'flex';
+        confirmModal.textContent = 'Save';
+        confirmModal.className = '';
+
+        editTextInput.value = button.dataset.originalText;
+        editAliasInput.value = button.dataset.alias || '';
+        editSecretToggle.checked = button.dataset.isSecret === 'true';
+
+        modal.style.display = 'flex';
+        editTextInput.focus();
+
+        const handleEnter = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirm();
+            }
+        };
+
+        const handleConfirm = () => {
+            const newText = editTextInput.value.trim();
+            if (!newText) { cleanup(); modal.style.display = 'none'; return; }
+            button.dataset.originalText = newText;
+            button.dataset.alias = editAliasInput.value.trim() || '';
+            button.dataset.isSecret = editSecretToggle.checked ? 'true' : 'false';
+            renderButtonContent(button);
+            updateBarcode(newText, editSecretToggle.checked);
+            saveHistory();
+            modal.style.display = 'none';
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            modal.style.display = 'none';
+            cleanup();
+        };
+
+        const cleanup = () => {
+            editFields.style.display = 'none';
+            confirmModal.removeEventListener('click', handleConfirm);
+            cancelModal.removeEventListener('click', handleCancel);
+            editTextInput.removeEventListener('keypress', handleEnter);
+            editAliasInput.removeEventListener('keypress', handleEnter);
+        };
+
+        confirmModal.addEventListener('click', handleConfirm);
+        cancelModal.addEventListener('click', handleCancel);
+        editTextInput.addEventListener('keypress', handleEnter);
+        editAliasInput.addEventListener('keypress', handleEnter);
+    };
+
     // Modified delete handler
-    const handleDelete = (historyItem, displayName) => {
-        const itemText = displayName || historyItem.querySelector('.history-button').textContent;
+    const handleDelete = (historyItem, alias) => {
+        const button = historyItem.querySelector('.history-button');
+        const itemText = alias || button.dataset.alias || button.dataset.originalText;
         showModal({
             title: `Delete "${itemText}"?`,
             inputMode: false,
@@ -188,12 +265,12 @@ window.onload = () => {
             pendingText = input.value;
             if (pendingText) {
                 showModal({
-                    title: 'Set Display Name',
+                    title: 'Save as Secret',
                     inputMode: true,
                     confirmText: 'Save',
-                    onConfirm: (displayName) => {
-                        if (displayName) {
-                            addToHistory(pendingText, displayName);
+                    onConfirm: (alias) => {
+                        if (alias) {
+                            addToHistory(pendingText, alias, true);
                             updateBarcode(pendingText, true);
                             input.value = '';
                         }
@@ -307,18 +384,40 @@ window.onload = () => {
         };
     };
 
+    // Render button content based on alias/secret state
+    const renderButtonContent = (button) => {
+        const text = button.dataset.originalText;
+        const alias = button.dataset.alias;
+        const isSecret = button.dataset.isSecret === 'true';
+
+        button.classList.toggle('secret-item', isSecret && !alias);
+
+        if (alias && !isSecret) {
+            const { html: subtitleHtml } = highlightTrailingWhitespace(text);
+            button.innerHTML = `<span class="alias-title">${alias}</span><span class="alias-subtitle">${subtitleHtml}</span>`;
+        } else if (alias && isSecret) {
+            button.innerHTML = `<span class="alias-title">${alias}</span>`;
+            button.classList.add('secret-item');
+        } else if (isSecret) {
+            button.textContent = '•••••';
+            button.classList.add('secret-item');
+        } else {
+            const { html } = highlightTrailingWhitespace(text);
+            button.innerHTML = html;
+        }
+    };
+
     // Modified addToHistory function
-    const addToHistory = (text, displayName = null) => {
+    const addToHistory = (text, alias = null, isSecret = false) => {
         const historyItem = document.createElement('div');
         historyItem.className = 'history-item';
-        
+
         // Only enable drag on non-touch devices
         if (!('ontouchstart' in window)) {
             historyItem.draggable = true;
-            
+
             // Drag event handlers
             historyItem.addEventListener('dragstart', (e) => {
-                console.log('dragstart');
                 historyItem.classList.add('dragging');
                 e.dataTransfer.effectAllowed = 'move';
             });
@@ -335,7 +434,7 @@ window.onload = () => {
                     const allItems = [...historyContainer.querySelectorAll('.history-item')];
                     const currentPos = allItems.indexOf(historyItem);
                     const draggingPos = allItems.indexOf(draggingItem);
-                    
+
                     if (currentPos < draggingPos) {
                         historyItem.parentNode.insertBefore(draggingItem, historyItem);
                     } else {
@@ -350,22 +449,35 @@ window.onload = () => {
 
         const button = document.createElement('button');
         button.className = 'history-button';
-        const displayText = displayName || text;
-        const { html, original } = highlightTrailingWhitespace(displayText);
-        button.innerHTML = html;
-        button.dataset.originalText = original;  // Store the original text with spaces
-        if (displayName) {
-            button.dataset.secret = text;
-            button.classList.add('secret-item');
-        }
-        button.onclick = () => updateBarcode(button.dataset.secret || button.dataset.originalText, !!displayName);
+        button.dataset.originalText = text;
+        button.dataset.alias = alias || '';
+        button.dataset.isSecret = isSecret ? 'true' : 'false';
+        renderButtonContent(button);
+
+        button.onclick = () => updateBarcode(button.dataset.originalText, button.dataset.isSecret === 'true');
+
+        // Double-tap to edit (mobile)
+        let lastTapTime = 0;
+        button.addEventListener('touchend', (e) => {
+            const now = Date.now();
+            if (now - lastTapTime < 300) {
+                e.preventDefault();
+                openEditModal(button, historyItem);
+            }
+            lastTapTime = now;
+        });
+        // Double-click to edit (desktop)
+        button.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            openEditModal(button, historyItem);
+        });
 
         const deleteButton = document.createElement('button');
         deleteButton.className = 'delete-button';
         deleteButton.textContent = '×';
         deleteButton.onclick = (e) => {
             e.stopPropagation();
-            handleDelete(historyItem, displayName);
+            handleDelete(historyItem, alias);
         };
 
         historyItem.appendChild(button);
@@ -380,7 +492,7 @@ window.onload = () => {
         if (text !== '') {
             if (text === 'hunter2') {
                 // Easter egg: Save as secret with asterisks
-                addToHistory(text, '*******');
+                addToHistory(text, '*******', true);
                 updateBarcode(text, true);
             } else {
                 addToHistory(text);
@@ -408,11 +520,11 @@ window.onload = () => {
 
     // Initialize history from localStorage
     const savedHistory = loadHistory();
-    savedHistory.reverse().forEach(item => addToHistory(item.text, item.displayName));
-    
+    savedHistory.reverse().forEach(item => addToHistory(item.text, item.alias, item.isSecret));
+
     // Show the most recent barcode
     if (savedHistory.length > 0) {
         const lastItem = savedHistory[savedHistory.length - 1];
-        updateBarcode(lastItem.text, !!lastItem.displayName);
+        updateBarcode(lastItem.text, lastItem.isSecret);
     }
 }; 
