@@ -48,10 +48,26 @@ window.onload = () => {
     // Load history from localStorage (supports folders)
     const loadHistory = () => {
         const savedHistory = localStorage.getItem('barcodeHistory');
-        if (savedHistory) {
-            return JSON.parse(savedHistory);
+        if (!savedHistory) return [{ text: defaultText, displayName: null }];
+        try {
+            const parsed = JSON.parse(savedHistory);
+            if (!Array.isArray(parsed)) return [{ text: defaultText, displayName: null }];
+            return parsed.map(item => {
+                if (item.type === 'folder') {
+                    return {
+                        type: 'folder',
+                        name: item.name || 'Unnamed',
+                        collapsed: !!item.collapsed,
+                        items: Array.isArray(item.items)
+                            ? item.items.map(i => ({ text: i.text || '', displayName: i.displayName || null }))
+                            : []
+                    };
+                }
+                return { text: item.text || '', displayName: item.displayName || null };
+            }).filter(item => item.type === 'folder' || item.text);
+        } catch (e) {
+            return [{ text: defaultText, displayName: null }];
         }
-        return [{ text: defaultText, displayName: null }];
     };
 
     // Save history to localStorage - walks DOM tree for folder structure
@@ -195,7 +211,7 @@ window.onload = () => {
             confirmModal.style.display = 'none';
             cancelModal.addEventListener('click', handleCancel);
         } else {
-            confirmModal.style.display = '';
+            confirmModal.style.display = 'block';
             confirmModal.addEventListener('click', handleConfirm);
             cancelModal.addEventListener('click', handleCancel);
             if (inputMode) {
@@ -260,6 +276,17 @@ window.onload = () => {
         const count = folder.querySelectorAll('.folder-items > .history-item').length;
         const countEl = folder.querySelector('.folder-count');
         if (countEl) countEl.textContent = count;
+    };
+
+    // Ensure folder names are unique by appending (2), (3), etc.
+    const getUniqueFolderName = (baseName) => {
+        const existingNames = new Set(
+            [...historyContainer.querySelectorAll('.folder')].map(f => f.dataset.folderName)
+        );
+        if (!existingNames.has(baseName)) return baseName;
+        let counter = 2;
+        while (existingNames.has(`${baseName} (${counter})`)) counter++;
+        return `${baseName} (${counter})`;
     };
 
     // Show move-to-folder modal for an item
@@ -372,7 +399,7 @@ window.onload = () => {
             confirmText: 'Create',
             onConfirm: (name) => {
                 if (name) {
-                    addFolder(name, [], false);
+                    addFolder(getUniqueFolderName(name), [], false);
                     saveHistory();
                 }
             }
@@ -401,41 +428,113 @@ window.onload = () => {
         }
     };
 
-    const handleTouchStart = (e, item) => {
-        touchDragItem = item;
-        touchStartY = e.touches[0].clientY;
+    // --- Shared drag helpers (used by both desktop and touch) ---
+
+    const startDrag = (item) => {
         item.classList.add('dragging');
         dragSourceFolder = item.classList.contains('folder') ? null : item.closest('.folder');
         if (dragSourceFolder) dragSourceFolder.classList.add('folder-drag-source');
         lastMovedOutOfFolder = null;
     };
 
-    const handleTouchMove = (e) => {
-        if (!touchDragItem) return;
-        e.preventDefault();
-        const touchY = e.touches[0].clientY;
+    const endDrag = (item) => {
+        if (item) item.classList.remove('dragging');
+        document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
+        document.querySelectorAll('.folder-drag-source').forEach(f => f.classList.remove('folder-drag-source'));
+        dragSourceFolder = null;
+        lastMovedOutOfFolder = null;
+        saveHistory();
+    };
 
-        // If dragging a folder, only reorder at top level
-        if (touchDragItem.classList.contains('folder')) {
-            const topLevel = [...historyContainer.children].filter(el =>
-                el.classList.contains('history-item') || el.classList.contains('folder'));
-            const currentIndex = topLevel.indexOf(touchDragItem);
-            for (let i = 0; i < topLevel.length; i++) {
-                if (topLevel[i] === touchDragItem) continue;
-                const rect = topLevel[i].getBoundingClientRect();
-                const midY = rect.top + rect.height / 2;
-                if (touchY < midY && i < currentIndex) {
-                    historyContainer.insertBefore(touchDragItem, topLevel[i]);
-                    return;
-                } else if (touchY > midY && i > currentIndex) {
-                    historyContainer.insertBefore(touchDragItem, topLevel[i].nextSibling);
-                    return;
-                }
+    const moveItemIntoFolder = (item, folder) => {
+        const oldFolder = item.closest('.folder');
+        const folderItemsEl = folder.querySelector('.folder-items');
+        folderItemsEl.insertBefore(item, folderItemsEl.firstChild);
+        if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
+        updateFolderCount(folder);
+        if (oldFolder) updateFolderCount(oldFolder);
+        lastMovedOutOfFolder = null;
+        updateDragFolderHighlights(item);
+    };
+
+    const moveItemOutOfFolder = (item, folder) => {
+        historyContainer.insertBefore(item, folder);
+        lastMovedOutOfFolder = folder;
+        updateFolderCount(folder);
+        updateDragFolderHighlights(item);
+    };
+
+    const reorderItem = (draggingItem, targetItem, clientY) => {
+        const targetContainer = targetItem.parentNode;
+        const dragContainer = draggingItem.parentNode;
+
+        if (dragContainer !== targetContainer) {
+            const oldFolder = draggingItem.closest('.folder');
+            const rect = targetItem.getBoundingClientRect();
+            const midY = rect.top + rect.height / 2;
+            if (clientY < midY) {
+                targetContainer.insertBefore(draggingItem, targetItem);
+            } else {
+                targetContainer.insertBefore(draggingItem, targetItem.nextSibling);
             }
-            return;
+            if (oldFolder) updateFolderCount(oldFolder);
+            const newFolder = draggingItem.closest('.folder');
+            if (newFolder) updateFolderCount(newFolder);
+            lastMovedOutOfFolder = null;
+            updateDragFolderHighlights(draggingItem);
+        } else {
+            const siblings = [...targetContainer.children].filter(el =>
+                el.classList.contains('history-item') || el.classList.contains('folder'));
+            const currentIndex = siblings.indexOf(draggingItem);
+            const targetIndex = siblings.indexOf(targetItem);
+            if (targetIndex < currentIndex) {
+                targetContainer.insertBefore(draggingItem, targetItem);
+            } else {
+                targetContainer.insertBefore(draggingItem, targetItem.nextSibling);
+            }
         }
+    };
 
-        // Dragging a history-item: check folder headers for drop-into or drag-out
+    const reorderTopLevel = (draggingEl, referenceEl) => {
+        const topLevel = [...historyContainer.children].filter(el =>
+            el.classList.contains('history-item') || el.classList.contains('folder'));
+        const draggingPos = topLevel.indexOf(draggingEl);
+        const referencePos = topLevel.indexOf(referenceEl);
+        if (referencePos < draggingPos) {
+            historyContainer.insertBefore(draggingEl, referenceEl);
+        } else {
+            historyContainer.insertBefore(draggingEl, referenceEl.nextSibling);
+        }
+    };
+
+    const moveItemToTopLevel = (item, clientY) => {
+        const oldFolder = item.closest('.folder');
+        if (!oldFolder) return;
+        const topLevel = [...historyContainer.children].filter(el =>
+            el.classList.contains('history-item') || el.classList.contains('folder'));
+        let inserted = false;
+        for (const child of topLevel) {
+            const rect = child.getBoundingClientRect();
+            if (clientY < rect.top + rect.height / 2) {
+                historyContainer.insertBefore(item, child);
+                inserted = true;
+                break;
+            }
+        }
+        if (!inserted) historyContainer.appendChild(item);
+        updateFolderCount(oldFolder);
+        updateDragFolderHighlights(item);
+    };
+
+    // --- Touch drag handlers (decomposed from single monolith) ---
+
+    const handleTouchStart = (e, item) => {
+        touchDragItem = item;
+        touchStartY = e.touches[0].clientY;
+        startDrag(item);
+    };
+
+    const tryTouchFolderHeader = (touchY) => {
         const folders = [...historyContainer.querySelectorAll('.folder')];
         for (const folder of folders) {
             const header = folder.querySelector('.folder-header');
@@ -443,107 +542,75 @@ window.onload = () => {
             if (touchY >= headerRect.top && touchY <= headerRect.bottom) {
                 const folderItemsEl = folder.querySelector('.folder-items');
                 if (touchDragItem.parentNode === folderItemsEl) {
-                    // Dragging over OWN folder header - move out to top level
-                    const oldFolder = touchDragItem.closest('.folder');
-                    historyContainer.insertBefore(touchDragItem, folder);
-                    lastMovedOutOfFolder = folder;
-                    if (oldFolder) updateFolderCount(oldFolder);
-                    updateDragFolderHighlights(touchDragItem);
-                    return;
+                    moveItemOutOfFolder(touchDragItem, folder);
+                } else if (lastMovedOutOfFolder !== folder) {
+                    moveItemIntoFolder(touchDragItem, folder);
                 }
-                if (lastMovedOutOfFolder === folder) return; // Anti-bounce
-                const oldFolder = touchDragItem.closest('.folder');
-                folderItemsEl.insertBefore(touchDragItem, folderItemsEl.firstChild);
-                if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-                updateFolderCount(folder);
-                if (oldFolder) updateFolderCount(oldFolder);
-                lastMovedOutOfFolder = null;
-                updateDragFolderHighlights(touchDragItem);
-                return;
+                return true;
             }
         }
+        return false;
+    };
 
-        // Check all visible history items for reordering (same or cross-container)
+    const tryTouchItemReorder = (touchY) => {
         const allItems = [...document.querySelectorAll('.history-item:not(.dragging)')];
         for (const item of allItems) {
             const rect = item.getBoundingClientRect();
-            if (touchY < rect.top || touchY > rect.bottom) continue;
-            const midY = rect.top + rect.height / 2;
-            const targetContainer = item.parentNode;
-            const dragContainer = touchDragItem.parentNode;
+            if (touchY >= rect.top && touchY <= rect.bottom) {
+                reorderItem(touchDragItem, item, touchY);
+                return true;
+            }
+        }
+        return false;
+    };
 
-            if (dragContainer !== targetContainer) {
-                const oldFolder = touchDragItem.closest('.folder');
-                if (touchY < midY) {
-                    targetContainer.insertBefore(touchDragItem, item);
-                } else {
-                    targetContainer.insertBefore(touchDragItem, item.nextSibling);
-                }
-                if (oldFolder) updateFolderCount(oldFolder);
-                const newFolder = touchDragItem.closest('.folder');
-                if (newFolder) updateFolderCount(newFolder);
-                lastMovedOutOfFolder = null;
-                updateDragFolderHighlights(touchDragItem);
-            } else {
-                const siblings = [...targetContainer.children].filter(el =>
-                    el.classList.contains('history-item') || el.classList.contains('folder'));
-                const currentIndex = siblings.indexOf(touchDragItem);
-                const targetIndex = siblings.indexOf(item);
-                if (touchY < midY && targetIndex < currentIndex) {
-                    targetContainer.insertBefore(touchDragItem, item);
-                } else if (touchY > midY && targetIndex > currentIndex) {
-                    targetContainer.insertBefore(touchDragItem, item.nextSibling);
+    const tryTouchEmptyFolder = (touchY) => {
+        const folders = [...historyContainer.querySelectorAll('.folder')];
+        for (const folder of folders) {
+            const folderRect = folder.getBoundingClientRect();
+            if (touchY >= folderRect.top && touchY <= folderRect.bottom) {
+                const folderItemsEl = folder.querySelector('.folder-items');
+                if (touchDragItem.parentNode === folderItemsEl) return true;
+                if (lastMovedOutOfFolder === folder) return true;
+                moveItemIntoFolder(touchDragItem, folder);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const handleTouchMove = (e) => {
+        if (!touchDragItem) return;
+        e.preventDefault();
+        const touchY = e.touches[0].clientY;
+
+        if (touchDragItem.classList.contains('folder')) {
+            // Folder dragging: only reorder at top level
+            const topLevel = [...historyContainer.children].filter(el =>
+                el.classList.contains('history-item') || el.classList.contains('folder'));
+            for (const child of topLevel) {
+                if (child === touchDragItem) continue;
+                const rect = child.getBoundingClientRect();
+                if (touchY >= rect.top && touchY <= rect.bottom) {
+                    reorderTopLevel(touchDragItem, child);
+                    return;
                 }
             }
             return;
         }
 
-        // Check if touch is within any folder's full bounds (for empty folders)
-        for (const folder of folders) {
-            const folderRect = folder.getBoundingClientRect();
-            if (touchY >= folderRect.top && touchY <= folderRect.bottom) {
-                const folderItemsEl = folder.querySelector('.folder-items');
-                if (touchDragItem.parentNode === folderItemsEl) return;
-                if (lastMovedOutOfFolder === folder) return; // Anti-bounce
-                const oldFolder = touchDragItem.closest('.folder');
-                folderItemsEl.insertBefore(touchDragItem, folderItemsEl.firstChild);
-                if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-                updateFolderCount(folder);
-                if (oldFolder) updateFolderCount(oldFolder);
-                updateDragFolderHighlights(touchDragItem);
-                return;
-            }
-        }
-
-        // Fallback: dragging to empty space at top level - move out of folder
-        if (touchDragItem.closest('.folder')) {
-            const oldFolder = touchDragItem.closest('.folder');
-            const topLevel = [...historyContainer.children].filter(el =>
-                el.classList.contains('history-item') || el.classList.contains('folder'));
-            let inserted = false;
-            for (const child of topLevel) {
-                const rect = child.getBoundingClientRect();
-                if (touchY < rect.top + rect.height / 2) {
-                    historyContainer.insertBefore(touchDragItem, child);
-                    inserted = true;
-                    break;
-                }
-            }
-            if (!inserted) historyContainer.appendChild(touchDragItem);
-            if (oldFolder) updateFolderCount(oldFolder);
-            updateDragFolderHighlights(touchDragItem);
-        }
+        // Item dragging: try each phase in priority order
+        if (tryTouchFolderHeader(touchY)) return;
+        if (tryTouchItemReorder(touchY)) return;
+        if (tryTouchEmptyFolder(touchY)) return;
+        if (touchDragItem.closest('.folder')) moveItemToTopLevel(touchDragItem, touchY);
     };
 
     const handleTouchEnd = () => {
         if (!touchDragItem) return;
-        touchDragItem.classList.remove('dragging');
+        const item = touchDragItem;
         touchDragItem = null;
-        document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
-        document.querySelectorAll('.folder-drag-source').forEach(f => f.classList.remove('folder-drag-source'));
-        dragSourceFolder = null;
-        lastMovedOutOfFolder = null;
-        saveHistory();
+        endDrag(item);
     };
 
     // Add touch event listeners to history container
@@ -553,13 +620,21 @@ window.onload = () => {
     // Define touch handlers before addToHistory
     const addTouchHandlers = (historyItem) => {
         historyItem.addEventListener('touchstart', (e) => {
-            // Only start drag after a short delay to allow for normal taps
+            const startY = e.touches[0].clientY;
             const touchTimer = setTimeout(() => {
                 handleTouchStart(e, historyItem);
             }, 200);
 
+            const onMove = (moveE) => {
+                if (Math.abs(moveE.touches[0].clientY - startY) > 10) {
+                    clearTimeout(touchTimer);
+                    historyItem.removeEventListener('touchmove', onMove);
+                }
+            };
+            historyItem.addEventListener('touchmove', onMove);
             historyItem.addEventListener('touchend', () => {
                 clearTimeout(touchTimer);
+                historyItem.removeEventListener('touchmove', onMove);
             }, { once: true });
         });
     };
@@ -588,24 +663,15 @@ window.onload = () => {
         if (!('ontouchstart' in window)) {
             historyItem.draggable = true;
 
-            // Drag event handlers — stopPropagation prevents folder from also getting .dragging
             historyItem.addEventListener('dragstart', (e) => {
                 e.stopPropagation();
-                historyItem.classList.add('dragging');
+                startDrag(historyItem);
                 e.dataTransfer.effectAllowed = 'move';
-                dragSourceFolder = historyItem.closest('.folder');
-                if (dragSourceFolder) dragSourceFolder.classList.add('folder-drag-source');
-                lastMovedOutOfFolder = null;
             });
 
             historyItem.addEventListener('dragend', (e) => {
                 e.stopPropagation();
-                historyItem.classList.remove('dragging');
-                document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
-                document.querySelectorAll('.folder-drag-source').forEach(f => f.classList.remove('folder-drag-source'));
-                dragSourceFolder = null;
-                lastMovedOutOfFolder = null;
-                saveHistory();
+                endDrag(historyItem);
             });
 
             historyItem.addEventListener('dragover', (e) => {
@@ -613,36 +679,7 @@ window.onload = () => {
                 e.stopPropagation();
                 const draggingItem = document.querySelector('.history-item.dragging');
                 if (!draggingItem || draggingItem === historyItem) return;
-                const dragParent = draggingItem.parentNode;
-                const targetParent = historyItem.parentNode;
-
-                if (dragParent !== targetParent) {
-                    // Cross-container move
-                    const oldFolder = draggingItem.closest('.folder');
-                    const rect = historyItem.getBoundingClientRect();
-                    const midY = rect.top + rect.height / 2;
-                    if (e.clientY < midY) {
-                        targetParent.insertBefore(draggingItem, historyItem);
-                    } else {
-                        targetParent.insertBefore(draggingItem, historyItem.nextSibling);
-                    }
-                    if (oldFolder) updateFolderCount(oldFolder);
-                    const newFolder = historyItem.closest('.folder');
-                    if (newFolder) updateFolderCount(newFolder);
-                    lastMovedOutOfFolder = null;
-                    updateDragFolderHighlights(draggingItem);
-                } else {
-                    // Same container reorder
-                    const allItems = [...targetParent.children].filter(el =>
-                        el.classList.contains('history-item') || el.classList.contains('folder'));
-                    const currentPos = allItems.indexOf(historyItem);
-                    const draggingPos = allItems.indexOf(draggingItem);
-                    if (currentPos < draggingPos) {
-                        targetParent.insertBefore(draggingItem, historyItem);
-                    } else {
-                        targetParent.insertBefore(draggingItem, historyItem.nextSibling);
-                    }
-                }
+                reorderItem(draggingItem, historyItem, e.clientY);
             });
         } else {
             // Add touch handlers for touch devices
@@ -736,79 +773,56 @@ window.onload = () => {
             folder.draggable = true;
 
             folder.addEventListener('dragstart', (e) => {
-                folder.classList.add('dragging');
+                startDrag(folder);
                 e.dataTransfer.effectAllowed = 'move';
             });
 
             folder.addEventListener('dragend', () => {
-                folder.classList.remove('dragging');
-                document.querySelectorAll('.folder-drop-target').forEach(f => f.classList.remove('folder-drop-target'));
-                document.querySelectorAll('.folder-drag-source').forEach(f => f.classList.remove('folder-drag-source'));
-                dragSourceFolder = null;
-                saveHistory();
+                endDrag(folder);
             });
 
-            // Folder-level dragover: catch drops anywhere on the folder (e.g. empty folder body)
             folder.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 const dragging = document.querySelector('.history-item.dragging');
                 if (!dragging) return;
                 if (dragging.parentNode === folderItemsEl) return;
-                if (lastMovedOutOfFolder === folder) return; // Anti-bounce
-                const oldFolder = dragging.closest('.folder');
-                folderItemsEl.insertBefore(dragging, folderItemsEl.firstChild);
-                if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-                updateFolderCount(folder);
-                if (oldFolder) updateFolderCount(oldFolder);
-                lastMovedOutOfFolder = null;
-                updateDragFolderHighlights(dragging);
+                if (lastMovedOutOfFolder === folder) return;
+                moveItemIntoFolder(dragging, folder);
             });
 
-            // Header dragover: accept items into folder, drag out, or reorder folders
             header.addEventListener('dragover', (e) => {
                 e.preventDefault();
-                e.stopPropagation(); // Don't let folder-level dragover also fire
+                e.stopPropagation();
                 const dragging = document.querySelector('.dragging');
                 if (!dragging || dragging === folder) return;
 
                 if (dragging.classList.contains('history-item')) {
                     if (dragging.parentNode === folderItemsEl) {
-                        // Dragging over OWN folder header - move out to top level
-                        historyContainer.insertBefore(dragging, folder);
-                        lastMovedOutOfFolder = folder;
-                        updateFolderCount(folder);
-                        updateDragFolderHighlights(dragging);
+                        moveItemOutOfFolder(dragging, folder);
                     } else if (lastMovedOutOfFolder !== folder) {
-                        // Dragging into this folder (skip if just moved out to prevent bounce)
-                        const oldFolder = dragging.closest('.folder');
-                        folderItemsEl.insertBefore(dragging, folderItemsEl.firstChild);
-                        if (folder.classList.contains('collapsed')) folder.classList.remove('collapsed');
-                        updateFolderCount(folder);
-                        if (oldFolder) updateFolderCount(oldFolder);
-                        lastMovedOutOfFolder = null;
-                        updateDragFolderHighlights(dragging);
+                        moveItemIntoFolder(dragging, folder);
                     }
                 } else if (dragging.classList.contains('folder') && dragging.parentNode === historyContainer) {
-                    // Another folder dragged over this header - reorder at top level
-                    const allTopLevel = [...historyContainer.children].filter(el =>
-                        el.classList.contains('history-item') || el.classList.contains('folder'));
-                    const currentPos = allTopLevel.indexOf(folder);
-                    const draggingPos = allTopLevel.indexOf(dragging);
-                    if (currentPos < draggingPos) {
-                        historyContainer.insertBefore(dragging, folder);
-                    } else {
-                        historyContainer.insertBefore(dragging, folder.nextSibling);
-                    }
+                    reorderTopLevel(dragging, folder);
                 }
             });
         } else {
             // Touch drag for folder reordering via header
             header.addEventListener('touchstart', (e) => {
+                const startY = e.touches[0].clientY;
                 const touchTimer = setTimeout(() => {
                     handleTouchStart(e, folder);
                 }, 200);
+                const onMove = (moveE) => {
+                    if (Math.abs(moveE.touches[0].clientY - startY) > 10) {
+                        clearTimeout(touchTimer);
+                        header.removeEventListener('touchmove', onMove);
+                    }
+                };
+                header.addEventListener('touchmove', onMove);
                 header.addEventListener('touchend', () => {
                     clearTimeout(touchTimer);
+                    header.removeEventListener('touchmove', onMove);
                 }, { once: true });
             });
         }

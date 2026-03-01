@@ -361,9 +361,10 @@ textarea:focus {
     flex-direction: column;
     gap: 4px;
     padding: 4px 4px 4px 12px;
-    max-height: 2000px;
+    max-height: 500px;
+    overflow-y: auto;
     opacity: 1;
-    transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
+    transition: max-height 0.2s ease, padding 0.2s ease, opacity 0.15s ease;
 }
 
 .folder.collapsed .folder-items {
@@ -434,4 +435,4 @@ textarea:focus {
 .modal-list-option:hover {
     border-color: #7aa2f7;
     background: #292e42;
-} 
+}
