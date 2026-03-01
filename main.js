@@ -4,6 +4,7 @@ window.onload = () => {
     const saveButton = document.getElementById('saveButton');
     const historyContainer = document.getElementById('historyContainer');
     const barcodeContainer = document.querySelector('.barcode-container');
+    const barcodeImg = document.getElementById('barcode');
     const defaultText = 'Hello World!';
     let longPressTimer;
     const LONG_PRESS_DURATION = 500; // 500ms for long press
@@ -69,10 +70,33 @@ window.onload = () => {
     let currentBarcodeText = defaultText;
     let isCurrentBarcodeSecret = false;
 
+    // Scale the barcode image to fit the viewport (rotated -90deg)
+    const scaleFullscreenBarcode = () => {
+        const applyScale = () => {
+            if (!barcodeImg.naturalWidth || !barcodeImg.naturalHeight) return;
+            const scale = Math.min(
+                window.innerWidth * 0.9 / barcodeImg.naturalHeight,
+                window.innerHeight * 0.9 / barcodeImg.naturalWidth
+            );
+            barcodeImg.style.transform = `rotate(-90deg) scale(${scale})`;
+        };
+        if (barcodeImg.complete && barcodeImg.naturalWidth) {
+            applyScale();
+        } else {
+            barcodeImg.addEventListener('load', applyScale, { once: true });
+        }
+    };
+
     // Toggle fullscreen
+    const onResize = () => {
+        if (barcodeContainer.classList.contains('fullscreen')) {
+            scaleFullscreenBarcode();
+        }
+    };
+
     barcodeContainer.addEventListener('click', () => {
         barcodeContainer.classList.toggle('fullscreen');
-        
+
         if (barcodeContainer.classList.contains('fullscreen')) {
             JsBarcode("#barcode", currentBarcodeText, {
                 ...barcodeOptions,
@@ -82,11 +106,15 @@ window.onload = () => {
                 margin: 10,
                 displayValue: !isCurrentBarcodeSecret
             });
+            scaleFullscreenBarcode();
+            window.addEventListener('resize', onResize);
         } else {
+            window.removeEventListener('resize', onResize);
             JsBarcode("#barcode", currentBarcodeText, {
                 ...barcodeOptions,
                 displayValue: !isCurrentBarcodeSecret
             });
+            barcodeImg.style.transform = '';
         }
     });
 
@@ -109,8 +137,10 @@ window.onload = () => {
                         fontSize: 30,
                         margin: 10
                     });
+                    scaleFullscreenBarcode();
                 } else {
                     JsBarcode("#barcode", text, options);
+                    if (barcodeImg.style.transform) barcodeImg.style.transform = '';
                 }
             } catch (error) {
                 console.error('Failed to generate barcode:', error);
