@@ -32,6 +32,11 @@ window.onload = () => {
             <h3 id="modalTitle">Set Display Name</h3>
             <input type="text" id="displayNameInput" placeholder="Enter display name...">
             <div id="modalList" class="modal-list"></div>
+            <div id="editFields" class="edit-fields" style="display:none">
+                <input type="text" id="editTextInput" placeholder="Barcode text...">
+                <input type="text" id="editAliasInput" placeholder="Alias (optional)...">
+                <label class="secret-toggle"><input type="checkbox" id="editSecretToggle"> Hide barcode text</label>
+            </div>
             <div class="modal-buttons">
                 <button id="cancelModal">Cancel</button>
                 <button id="confirmModal">Save</button>
@@ -301,16 +306,27 @@ window.onload = () => {
     const modalTitle = document.getElementById('modalTitle');
     const displayNameInput = document.getElementById('displayNameInput');
     const modalList = document.getElementById('modalList');
+    const editFields = document.getElementById('editFields');
+    const editTextInput = document.getElementById('editTextInput');
+    const editAliasInput = document.getElementById('editAliasInput');
+    const editSecretToggle = document.getElementById('editSecretToggle');
     const cancelModal = document.getElementById('cancelModal');
     const confirmModal = document.getElementById('confirmModal');
 
     // Load history from localStorage (supports folders)
     const loadHistory = () => {
         const savedHistory = localStorage.getItem('barcodeHistory');
-        if (!savedHistory) return [{ text: defaultText, displayName: null }];
+        if (!savedHistory) return [{ text: defaultText, alias: null, isSecret: false }];
         try {
             const parsed = JSON.parse(savedHistory);
-            if (!Array.isArray(parsed)) return [{ text: defaultText, displayName: null }];
+            if (!Array.isArray(parsed)) return [{ text: defaultText, alias: null, isSecret: false }];
+            const migrateItem = (item) => {
+                // Migrate old displayName format to alias/isSecret
+                if (item.displayName !== undefined) {
+                    return { text: item.text || '', alias: item.displayName || null, isSecret: !!item.displayName };
+                }
+                return { text: item.text || '', alias: item.alias || null, isSecret: !!item.isSecret };
+            };
             return parsed.map(item => {
                 if (item.type === 'folder') {
                     return {
@@ -318,22 +334,23 @@ window.onload = () => {
                         name: item.name || 'Unnamed',
                         collapsed: !!item.collapsed,
                         items: Array.isArray(item.items)
-                            ? item.items.map(i => ({ text: i.text || '', displayName: i.displayName || null }))
+                            ? item.items.map(migrateItem)
                             : []
                     };
                 }
-                return { text: item.text || '', displayName: item.displayName || null };
+                return migrateItem(item);
             }).filter(item => item.type === 'folder' || item.text);
         } catch (e) {
-            return [{ text: defaultText, displayName: null }];
+            return [{ text: defaultText, alias: null, isSecret: false }];
         }
     };
 
     // Save history to localStorage - walks DOM tree for folder structure
     const saveHistory = () => {
         const serializeButton = (button) => ({
-            text: button.dataset.secret || button.dataset.originalText,
-            displayName: button.dataset.secret ? button.textContent : null
+            text: button.dataset.originalText,
+            alias: button.dataset.alias || null,
+            isSecret: button.dataset.isSecret === 'true'
         });
 
         const result = [];
@@ -447,7 +464,9 @@ window.onload = () => {
         displayNameInput.style.display = inputMode ? 'block' : 'none';
         modalList.style.display = listItems ? 'flex' : 'none';
         modalList.innerHTML = '';
+        editFields.style.display = 'none';
         confirmModal.textContent = confirmText || 'Save';
+
 
         modal.style.display = 'flex';
         if (inputMode) {
@@ -508,9 +527,64 @@ window.onload = () => {
         }
     };
 
+    // Edit modal for double-tap
+    const openEditModal = (button, historyItem) => {
+        modalTitle.textContent = 'Edit Barcode';
+        displayNameInput.style.display = 'none';
+        editFields.style.display = 'flex';
+        confirmModal.textContent = 'Save';
+        confirmModal.className = '';
+
+        editTextInput.value = button.dataset.originalText;
+        editAliasInput.value = button.dataset.alias || '';
+        editSecretToggle.checked = button.dataset.isSecret === 'true';
+
+        modal.style.display = 'flex';
+        editTextInput.focus();
+
+        const handleEnter = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirm();
+            }
+        };
+
+        const handleConfirm = () => {
+            const newText = editTextInput.value.trim();
+            if (!newText) { cleanup(); modal.style.display = 'none'; return; }
+            button.dataset.originalText = newText;
+            button.dataset.alias = editAliasInput.value.trim() || '';
+            button.dataset.isSecret = editSecretToggle.checked ? 'true' : 'false';
+            renderButtonContent(button);
+            updateBarcode(newText, editSecretToggle.checked);
+            saveHistory();
+            modal.style.display = 'none';
+            cleanup();
+        };
+
+        const handleCancel = () => {
+            modal.style.display = 'none';
+            cleanup();
+        };
+
+        const cleanup = () => {
+            editFields.style.display = 'none';
+            confirmModal.removeEventListener('click', handleConfirm);
+            cancelModal.removeEventListener('click', handleCancel);
+            editTextInput.removeEventListener('keypress', handleEnter);
+            editAliasInput.removeEventListener('keypress', handleEnter);
+        };
+
+        confirmModal.addEventListener('click', handleConfirm);
+        cancelModal.addEventListener('click', handleCancel);
+        editTextInput.addEventListener('keypress', handleEnter);
+        editAliasInput.addEventListener('keypress', handleEnter);
+    };
+
     // Delete handler for history items
-    const handleDelete = (historyItem, displayName) => {
-        const itemText = displayName || historyItem.querySelector('.history-button').textContent;
+    const handleDelete = (historyItem, alias) => {
+        const button = historyItem.querySelector('.history-button');
+        const itemText = alias || button.dataset.alias || button.dataset.originalText;
         showModal({
             title: `Delete "${itemText}"?`,
             inputMode: false,
@@ -631,12 +705,12 @@ window.onload = () => {
             pendingText = input.value;
             if (pendingText) {
                 showModal({
-                    title: 'Set Display Name',
+                    title: 'Save as Secret',
                     inputMode: true,
                     confirmText: 'Save',
-                    onConfirm: (displayName) => {
-                        if (displayName) {
-                            addToHistory(pendingText, displayName);
+                    onConfirm: (alias) => {
+                        if (alias) {
+                            addToHistory(pendingText, alias, true);
                             updateBarcode(pendingText, true);
                             input.value = '';
                         }
@@ -941,8 +1015,31 @@ window.onload = () => {
         };
     };
 
+    // Render button content based on alias/secret state
+    const renderButtonContent = (button) => {
+        const text = button.dataset.originalText;
+        const alias = button.dataset.alias;
+        const isSecret = button.dataset.isSecret === 'true';
+
+        button.classList.toggle('secret-item', isSecret && !alias);
+
+        if (alias && !isSecret) {
+            const { html: subtitleHtml } = highlightTrailingWhitespace(text);
+            button.innerHTML = `<span class="alias-title">${alias}</span><span class="alias-subtitle">${subtitleHtml}</span>`;
+        } else if (alias && isSecret) {
+            button.innerHTML = `<span class="alias-title">${alias}</span>`;
+            button.classList.add('secret-item');
+        } else if (isSecret) {
+            button.textContent = '•••••';
+            button.classList.add('secret-item');
+        } else {
+            const { html } = highlightTrailingWhitespace(text);
+            button.innerHTML = html;
+        }
+    };
+
     // Modified addToHistory function - supports target container for folders
-    const addToHistory = (text, displayName = null, targetContainer = null) => {
+    const addToHistory = (text, alias = null, isSecret = false, targetContainer = null) => {
         const container = targetContainer || historyContainer;
         const historyItem = document.createElement('div');
         historyItem.className = 'history-item';
@@ -976,15 +1073,28 @@ window.onload = () => {
 
         const button = document.createElement('button');
         button.className = 'history-button';
-        const displayText = displayName || text;
-        const { html, original } = highlightTrailingWhitespace(displayText);
-        button.innerHTML = html;
-        button.dataset.originalText = original;  // Store the original text with spaces
-        if (displayName) {
-            button.dataset.secret = text;
-            button.classList.add('secret-item');
-        }
-        button.onclick = () => updateBarcode(button.dataset.secret || button.dataset.originalText, !!displayName);
+        button.dataset.originalText = text;
+        button.dataset.alias = alias || '';
+        button.dataset.isSecret = isSecret ? 'true' : 'false';
+        renderButtonContent(button);
+
+        button.onclick = () => updateBarcode(button.dataset.originalText, button.dataset.isSecret === 'true');
+
+        // Double-tap to edit (mobile)
+        let lastTapTime = 0;
+        button.addEventListener('touchend', (e) => {
+            const now = Date.now();
+            if (now - lastTapTime < 300) {
+                e.preventDefault();
+                openEditModal(button, historyItem);
+            }
+            lastTapTime = now;
+        });
+        // Double-click to edit (desktop)
+        button.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            openEditModal(button, historyItem);
+        });
 
         const moveButton = document.createElement('button');
         moveButton.className = 'move-button';
@@ -999,7 +1109,7 @@ window.onload = () => {
         deleteButton.textContent = '\u00D7';
         deleteButton.onclick = (e) => {
             e.stopPropagation();
-            handleDelete(historyItem, displayName);
+            handleDelete(historyItem, alias);
         };
 
         historyItem.appendChild(button);
@@ -1119,7 +1229,7 @@ window.onload = () => {
 
         // Add items to the folder (reverse since addToHistory prepends)
         [...items].reverse().forEach(item => {
-            addToHistory(item.text, item.displayName, folderItemsEl);
+            addToHistory(item.text, item.alias, item.isSecret, folderItemsEl);
         });
 
         return folder;
@@ -1131,7 +1241,7 @@ window.onload = () => {
         if (text !== '') {
             if (text === 'hunter2') {
                 // Easter egg: Save as secret with asterisks
-                addToHistory(text, '*******');
+                addToHistory(text, '*******', true);
                 updateBarcode(text, true);
             } else {
                 addToHistory(text);
@@ -1163,7 +1273,7 @@ window.onload = () => {
         if (item.type === 'folder') {
             addFolder(item.name, item.items || [], item.collapsed || false);
         } else {
-            addToHistory(item.text, item.displayName);
+            addToHistory(item.text, item.alias, item.isSecret);
         }
     });
 
@@ -1173,10 +1283,10 @@ window.onload = () => {
         if (lastItem.type === 'folder') {
             if (lastItem.items && lastItem.items.length > 0) {
                 const last = lastItem.items[lastItem.items.length - 1];
-                updateBarcode(last.text, !!last.displayName);
+                updateBarcode(last.text, last.isSecret);
             }
         } else {
-            updateBarcode(lastItem.text, !!lastItem.displayName);
+            updateBarcode(lastItem.text, lastItem.isSecret);
         }
     }
 };
