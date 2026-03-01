@@ -10,6 +10,10 @@
     <div class="container">
         <div class="layout">
             <div class="barcode-container">
+                <div class="format-toggle">
+                    <button id="formatToggle" class="active" data-format="barcode">1D</button>
+                    <button id="formatToggleQR" data-format="qr">QR</button>
+                </div>
                 <img id="barcode"/>
             </div>
             <div class="controls">
@@ -17,7 +21,7 @@
                     <input 
                         id="barcodeInput" 
                         type="text"
-                        placeholder="Enter text to generate barcode..."
+                        placeholder="Enter text to encode..."
                         autocapitalize="off"
                         autocorrect="off"
                         spellcheck="false"
@@ -30,12 +34,13 @@
                     <!-- History buttons will be added here -->
                 </div>
                 <div class="instructions">
-                    Click the checkmark to save barcodes in your local storage. <strong>Long-press</strong> the checkmark to create a barcode that doesn't display the value in plain text (for e.g. passwords). <strong>Double-tap</strong> a saved barcode to edit it or add an alias. Drag to re-order. Use 📁 to create folders, and the <strong>▸</strong> button to move barcodes between folders. Use 📷 to scan a barcode or QR code with your camera or from an image.
+                    Use the toggle to switch between barcode and QR code mode. Click the checkmark to save codes in your local storage. <strong>Long-press</strong> the checkmark to create a code that doesn't display the value in plain text (for e.g. passwords). <strong>Double-tap</strong> a saved code to edit it or add an alias. Drag to re-order. Use 📁 to create folders, and the <strong>▸</strong> button to move codes between folders. Use 📷 to scan a barcode or QR code with your camera or from an image.
                 </div>
             </div>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.0/dist/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="main.js"></script>
 </body>
 </html> 

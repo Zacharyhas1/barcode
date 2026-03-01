@@ -6,13 +6,14 @@ window.onload = () => {
     const scanButton = document.getElementById('scanButton');
     const historyContainer = document.getElementById('historyContainer');
     const barcodeContainer = document.querySelector('.barcode-container');
-    const barcodeImg = document.getElementById('barcode');
     const defaultText = 'Hello World!';
     let longPressTimer;
     const LONG_PRESS_DURATION = 500; // 500ms for long press
     let wasLongPress = false;
     let pressStartTime;
     let pendingText = ''; // Store text waiting for display name
+    let currentFormat = 'barcode'; // 'barcode' or 'qr'
+    let formatOverride = false; // true when user manually toggles format
 
     // Barcode options
     const barcodeOptions = {
@@ -323,9 +324,9 @@ window.onload = () => {
             const migrateItem = (item) => {
                 // Migrate old displayName format to alias/isSecret
                 if (item.displayName !== undefined) {
-                    return { text: item.text || '', alias: item.displayName || null, isSecret: !!item.displayName };
+                    return { text: item.text || '', alias: item.displayName || null, isSecret: !!item.displayName, format: item.format || 'barcode' };
                 }
-                return { text: item.text || '', alias: item.alias || null, isSecret: !!item.isSecret };
+                return { text: item.text || '', alias: item.alias || null, isSecret: !!item.isSecret, format: item.format || 'barcode' };
             };
             return parsed.map(item => {
                 if (item.type === 'folder') {
@@ -341,7 +342,7 @@ window.onload = () => {
                 return migrateItem(item);
             }).filter(item => item.type === 'folder' || item.text);
         } catch (e) {
-            return [{ text: defaultText, alias: null, isSecret: false }];
+            return [{ text: defaultText, alias: null, isSecret: false, format: 'barcode' }];
         }
     };
 
@@ -350,7 +351,8 @@ window.onload = () => {
         const serializeButton = (button) => ({
             text: button.dataset.originalText,
             alias: button.dataset.alias || null,
-            isSecret: button.dataset.isSecret === 'true'
+            isSecret: button.dataset.isSecret === 'true',
+            format: button.dataset.format || 'barcode'
         });
 
         const result = [];
@@ -376,84 +378,66 @@ window.onload = () => {
         localStorage.setItem('barcodeHistory', JSON.stringify(result));
     };
 
-    // Keep track of current barcode text and secret status
+    // Keep track of current barcode text, secret status, and format
     let currentBarcodeText = defaultText;
     let isCurrentBarcodeSecret = false;
-
-    // Scale the barcode image to fit the viewport (rotated -90deg)
-    const scaleFullscreenBarcode = () => {
-        const applyScale = () => {
-            if (!barcodeImg.naturalWidth || !barcodeImg.naturalHeight) return;
-            const scale = Math.min(
-                window.innerWidth * 0.9 / barcodeImg.naturalHeight,
-                window.innerHeight * 0.9 / barcodeImg.naturalWidth
-            );
-            barcodeImg.style.transform = `rotate(-90deg) scale(${scale})`;
-        };
-        if (barcodeImg.complete && barcodeImg.naturalWidth) {
-            applyScale();
-        } else {
-            barcodeImg.addEventListener('load', applyScale, { once: true });
-        }
-    };
+    let currentBarcodeFormat = 'barcode';
 
     // Toggle fullscreen
-    const onResize = () => {
-        if (barcodeContainer.classList.contains('fullscreen')) {
-            scaleFullscreenBarcode();
-        }
-    };
-
     barcodeContainer.addEventListener('click', () => {
         barcodeContainer.classList.toggle('fullscreen');
 
-        if (barcodeContainer.classList.contains('fullscreen')) {
-            JsBarcode("#barcode", currentBarcodeText, {
-                ...barcodeOptions,
-                width: 2,
-                height: 200,
-                fontSize: 30,
-                margin: 10,
-                displayValue: !isCurrentBarcodeSecret
-            });
-            scaleFullscreenBarcode();
-            window.addEventListener('resize', onResize);
-        } else {
-            window.removeEventListener('resize', onResize);
-            JsBarcode("#barcode", currentBarcodeText, {
-                ...barcodeOptions,
-                displayValue: !isCurrentBarcodeSecret
-            });
-            barcodeImg.style.transform = '';
-        }
+        updateBarcode(currentBarcodeText, isCurrentBarcodeSecret, currentBarcodeFormat);
     });
 
-    // Function to update barcode
-    const updateBarcode = (text, isSecret = false) => {
+    // Auto-detect format based on content
+    const detectFormat = (text) => {
+        if (/^https?:\/\/|^www\./i.test(text)) return 'qr';
+        if (text.length > 40) return 'qr';
+        return 'barcode';
+    };
+
+    // Function to update barcode or QR code
+    const updateBarcode = (text, isSecret = false, format = 'barcode') => {
         if (text !== '') {
             try {
                 currentBarcodeText = text;
                 isCurrentBarcodeSecret = isSecret;
-                const options = {
-                    ...barcodeOptions,
-                    displayValue: !isSecret
-                };
+                currentBarcodeFormat = format;
 
-                if (barcodeContainer.classList.contains('fullscreen')) {
-                    JsBarcode("#barcode", text, {
-                        ...options,
-                        width: 2,
-                        height: 200,
-                        fontSize: 30,
-                        margin: 10
-                    });
-                    scaleFullscreenBarcode();
+                const barcodeImg = document.getElementById('barcode');
+                const isFullscreen = barcodeContainer.classList.contains('fullscreen');
+
+                if (format === 'qr') {
+                    barcodeImg.removeAttribute('width');
+                    barcodeImg.removeAttribute('height');
+                    const qr = qrcode(0, 'M');
+                    qr.addData(text);
+                    qr.make();
+                    const cellSize = isFullscreen ? 8 : 4;
+                    const margin = isFullscreen ? 4 : 2;
+                    barcodeImg.src = qr.createDataURL(cellSize, margin);
+                    barcodeContainer.classList.add('qr-mode');
                 } else {
-                    JsBarcode("#barcode", text, options);
-                    if (barcodeImg.style.transform) barcodeImg.style.transform = '';
+                    barcodeContainer.classList.remove('qr-mode');
+                    const options = {
+                        ...barcodeOptions,
+                        displayValue: !isSecret
+                    };
+                    if (isFullscreen) {
+                        JsBarcode("#barcode", text, {
+                            ...options,
+                            width: 2,
+                            height: 200,
+                            fontSize: 30,
+                            margin: 10
+                        });
+                    } else {
+                        JsBarcode("#barcode", text, options);
+                    }
                 }
             } catch (error) {
-                console.error('Failed to generate barcode:', error);
+                console.error('Failed to generate code:', error);
             }
         }
     };
@@ -556,7 +540,7 @@ window.onload = () => {
             button.dataset.alias = editAliasInput.value.trim() || '';
             button.dataset.isSecret = editSecretToggle.checked ? 'true' : 'false';
             renderButtonContent(button);
-            updateBarcode(newText, editSecretToggle.checked);
+            updateBarcode(newText, editSecretToggle.checked, button.dataset.format || 'barcode');
             saveHistory();
             modal.style.display = 'none';
             cleanup();
@@ -710,8 +694,8 @@ window.onload = () => {
                     confirmText: 'Save',
                     onConfirm: (alias) => {
                         if (alias) {
-                            addToHistory(pendingText, alias, true);
-                            updateBarcode(pendingText, true);
+                            addToHistory(pendingText, alias, true, currentFormat);
+                            updateBarcode(pendingText, true, currentFormat);
                             input.value = '';
                         }
                     }
@@ -1038,8 +1022,8 @@ window.onload = () => {
         }
     };
 
-    // Modified addToHistory function - supports target container for folders
-    const addToHistory = (text, alias = null, isSecret = false, targetContainer = null) => {
+    // Modified addToHistory function - supports format and target container for folders
+    const addToHistory = (text, alias = null, isSecret = false, format = 'barcode', targetContainer = null) => {
         const container = targetContainer || historyContainer;
         const historyItem = document.createElement('div');
         historyItem.className = 'history-item';
@@ -1076,9 +1060,17 @@ window.onload = () => {
         button.dataset.originalText = text;
         button.dataset.alias = alias || '';
         button.dataset.isSecret = isSecret ? 'true' : 'false';
+        button.dataset.format = format;
         renderButtonContent(button);
+        if (format === 'qr') {
+            button.classList.add('qr-item');
+        }
 
-        button.onclick = () => updateBarcode(button.dataset.originalText, button.dataset.isSecret === 'true');
+        button.onclick = () => {
+            const fmt = button.dataset.format || 'barcode';
+            updateToggleUI(fmt);
+            updateBarcode(button.dataset.originalText, button.dataset.isSecret === 'true', fmt);
+        };
 
         // Double-tap to edit (mobile)
         let lastTapTime = 0;
@@ -1229,7 +1221,7 @@ window.onload = () => {
 
         // Add items to the folder (reverse since addToHistory prepends)
         [...items].reverse().forEach(item => {
-            addToHistory(item.text, item.alias, item.isSecret, folderItemsEl);
+            addToHistory(item.text, item.alias, item.isSecret, item.format || 'barcode', folderItemsEl);
         });
 
         return folder;
@@ -1241,22 +1233,31 @@ window.onload = () => {
         if (text !== '') {
             if (text === 'hunter2') {
                 // Easter egg: Save as secret with asterisks
-                addToHistory(text, '*******', true);
-                updateBarcode(text, true);
+                addToHistory(text, '*******', true, currentFormat);
+                updateBarcode(text, true, currentFormat);
             } else {
-                addToHistory(text);
-                updateBarcode(text, false);
+                addToHistory(text, null, false, currentFormat);
+                updateBarcode(text, false, currentFormat);
             }
             input.value = '';
+            formatOverride = false;
         }
     };
 
-    // Update barcode when text changes
+    // Update barcode when text changes (auto-detect format unless overridden)
     input.addEventListener('input', (e) => {
         const text = e.target.value;
-        if (text !== '') {
-            updateBarcode(text, false);
+        if (text === '') {
+            formatOverride = false;
+            return;
         }
+        if (!formatOverride) {
+            const detected = detectFormat(text);
+            if (detected !== currentFormat) {
+                updateToggleUI(detected);
+            }
+        }
+        updateBarcode(text, false, currentFormat);
     });
 
     // Handle Enter key
@@ -1267,26 +1268,55 @@ window.onload = () => {
         }
     });
 
+    // Format toggle handler
+    const formatToggleBtn = document.getElementById('formatToggle');
+    const formatToggleQRBtn = document.getElementById('formatToggleQR');
+
+    const updateToggleUI = (format) => {
+        currentFormat = format;
+        formatToggleBtn.classList.toggle('active', format === 'barcode');
+        formatToggleQRBtn.classList.toggle('active', format === 'qr');
+    };
+
+    const setFormat = (format) => {
+        updateToggleUI(format);
+        const text = input.value || currentBarcodeText;
+        if (text) updateBarcode(text, isCurrentBarcodeSecret, currentFormat);
+    };
+
+    formatToggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        formatOverride = true;
+        setFormat('barcode');
+    });
+    formatToggleQRBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        formatOverride = true;
+        setFormat('qr');
+    });
+
     // Initialize history from localStorage
     const savedHistory = loadHistory();
     savedHistory.reverse().forEach(item => {
         if (item.type === 'folder') {
             addFolder(item.name, item.items || [], item.collapsed || false);
         } else {
-            addToHistory(item.text, item.alias, item.isSecret);
+            addToHistory(item.text, item.alias, item.isSecret, item.format || 'barcode');
         }
     });
 
-    // Show the most recent barcode
+    // Show the most recent barcode and restore its format
     if (savedHistory.length > 0) {
         const lastItem = savedHistory[savedHistory.length - 1];
         if (lastItem.type === 'folder') {
             if (lastItem.items && lastItem.items.length > 0) {
                 const last = lastItem.items[lastItem.items.length - 1];
-                updateBarcode(last.text, last.isSecret);
+                setFormat(last.format || 'barcode');
+                updateBarcode(last.text, last.isSecret, last.format || 'barcode');
             }
         } else {
-            updateBarcode(lastItem.text, lastItem.isSecret);
+            setFormat(lastItem.format || 'barcode');
+            updateBarcode(lastItem.text, lastItem.isSecret, lastItem.format || 'barcode');
         }
     }
 };
