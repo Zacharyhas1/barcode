@@ -333,4 +333,54 @@ textarea:focus {
 .history-button.qr-item::before {
     content: 'QR ';
     opacity: 0.5;
-} 
+}
+
+/* Alias display */
+.history-button {
+    touch-action: manipulation;
+}
+
+.alias-title {
+    display: block;
+    color: #a9b1d6;
+}
+
+.alias-subtitle {
+    display: block;
+    font-size: 8px;
+    color: #565f89;
+    margin-top: 2px;
+}
+
+/* Edit modal fields */
+.edit-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.edit-fields input[type="text"] {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #414868;
+    border-radius: 6px;
+    font-size: 10px;
+    background: #1a1b26;
+    color: #a9b1d6;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.secret-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: #565f89;
+    cursor: pointer;
+}
+
+.secret-toggle input[type="checkbox"] {
+    accent-color: #bb9af7;
+}
